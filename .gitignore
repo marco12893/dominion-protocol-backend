@@ -1,0 +1,18 @@
+node_modules/
+yarn-error.log
+*.log
+.env
+*.yml
+Dockerfile
+*.sh
+google-drive/
+uploads/
+temp/
+
+# IDE files
+.idea/
+.vscode/
+
+build/
+.vercel
+.env*.local
