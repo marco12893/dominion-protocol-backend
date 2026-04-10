@@ -131,6 +131,7 @@ io.on("connection", (socket) => {
       unit.targetY = unit.y;
       unit.destinationX = unit.x;
       unit.destinationY = unit.y;
+      unit.isMoving = false;
     }
 
     io.emit("world:state", serializeWorldState(worldState));
@@ -161,6 +162,44 @@ io.on("connection", (socket) => {
 
 setInterval(() => {
   let hasMoved = false;
+
+  for (const unit of worldState.units) {
+    if (unit.health <= 0 || unit.attackTargetId) {
+      continue;
+    }
+
+    const remainingDistance = getDistanceBetweenPoints(
+      unit.x,
+      unit.y,
+      unit.destinationX,
+      unit.destinationY,
+    );
+    const hasActiveOrder =
+      remainingDistance > UNIT_RADIUS &&
+      (unit.path.length > 0 || remainingDistance > 1);
+
+    if (!hasActiveOrder) {
+      let nearestTarget = null;
+      let minDistance = UNIT_ATTACK_RANGE;
+
+      for (const otherUnit of worldState.units) {
+        if (otherUnit.id === unit.id || otherUnit.health <= 0 || otherUnit.owner === unit.owner) {
+          continue;
+        }
+
+        const distance = getDistanceBetweenPoints(unit.x, unit.y, otherUnit.x, otherUnit.y);
+        if (distance <= minDistance) {
+          minDistance = distance;
+          nearestTarget = otherUnit;
+        }
+      }
+
+      if (nearestTarget) {
+        unit.attackTargetId = nearestTarget.id;
+        hasMoved = true;
+      }
+    }
+  }
 
   hasMoved = processAttacks(worldState.units, 1 / TICK_RATE) || hasMoved;
 
@@ -209,6 +248,7 @@ function createUnit(id, x, y, owner = "player") {
     maxHealth: UNIT_MAX_HEALTH,
     attackTargetId: null,
     attackCooldown: 0,
+    isMoving: false,
   };
 }
 
@@ -272,6 +312,7 @@ function processAttacks(units, deltaTime) {
     unit.targetY = unit.y;
     unit.destinationX = unit.x;
     unit.destinationY = unit.y;
+    unit.isMoving = false;
 
     if (unit.attackCooldown > 0) {
       unit.attackCooldown -= deltaTime;
@@ -304,6 +345,7 @@ function assignUnitPath(unit, desiredDestination) {
     unit.targetY = unit.y;
     unit.destinationX = unit.x;
     unit.destinationY = unit.y;
+    unit.isMoving = false;
     return;
   }
 
@@ -316,6 +358,7 @@ function assignUnitPath(unit, desiredDestination) {
     unit.targetY = unit.y;
     unit.destinationX = destinationPoint.x;
     unit.destinationY = destinationPoint.y;
+    unit.isMoving = true;
     return;
   }
 
@@ -338,6 +381,8 @@ function assignUnitPath(unit, desiredDestination) {
     unit.targetX = destinationPoint.x;
     unit.targetY = destinationPoint.y;
   }
+  
+  unit.isMoving = true;
 }
 
 function clamp(value, min, max) {
@@ -345,6 +390,14 @@ function clamp(value, min, max) {
 }
 
 function advanceUnit(unit, deltaTime) {
+  if (!unit.isMoving) {
+    unit.destinationX = unit.x;
+    unit.destinationY = unit.y;
+    unit.targetX = unit.x;
+    unit.targetY = unit.y;
+    return false;
+  }
+
   syncUnitTarget(unit);
 
   const dx = unit.targetX - unit.x;
@@ -358,6 +411,9 @@ function advanceUnit(unit, deltaTime) {
     }
 
     const progressed = advanceToNextWaypoint(unit);
+    if (!progressed) {
+      unit.isMoving = false;
+    }
     return progressed || distance !== 0;
   }
 
@@ -503,47 +559,34 @@ function detectAndResolveDeadlocks(units) {
   let hasRepathed = false;
 
   for (const unit of units) {
-    const previousRemainingDistance =
-      unit.previousRemainingDistance ||
-      getDistanceBetweenPoints(
-        unit.previousX,
-        unit.previousY,
-        unit.destinationX,
-        unit.destinationY,
-      );
-    const movedDistance = getDistanceBetweenPoints(
+    const previousRemainingTargetDistance = getDistanceBetweenPoints(
       unit.previousX,
       unit.previousY,
+      unit.targetX,
+      unit.targetY,
+    );
+    const remainingTargetDistance = getDistanceBetweenPoints(
       unit.x,
       unit.y,
+      unit.targetX,
+      unit.targetY,
     );
-    const remainingDistance = getDistanceBetweenPoints(
-      unit.x,
-      unit.y,
-      unit.destinationX,
-      unit.destinationY,
-    );
-    const destinationProgress = previousRemainingDistance - remainingDistance;
-    const hasActiveOrder =
-      remainingDistance > UNIT_RADIUS &&
-      (unit.path.length > 0 || remainingDistance > 1);
+    const targetProgress = previousRemainingTargetDistance - remainingTargetDistance;
 
     if (unit.repathCooldownTicks > 0) {
       unit.repathCooldownTicks -= 1;
     }
 
-    if (
-      hasActiveOrder &&
-      movedDistance <= STUCK_MOVEMENT_EPSILON &&
-      destinationProgress <= STUCK_PROGRESS_EPSILON
-    ) {
+    if (unit.isMoving && targetProgress <= STUCK_PROGRESS_EPSILON) {
       unit.stuckTicks += 1;
+    } else if (unit.isMoving) {
+      unit.stuckTicks = Math.max(0, unit.stuckTicks - 2);
     } else {
       unit.stuckTicks = 0;
     }
 
     if (
-      hasActiveOrder &&
+      unit.isMoving &&
       unit.stuckTicks >= STUCK_TICKS_THRESHOLD &&
       unit.repathCooldownTicks === 0
     ) {
@@ -558,7 +601,6 @@ function detectAndResolveDeadlocks(units) {
 
     unit.previousX = unit.x;
     unit.previousY = unit.y;
-    unit.previousRemainingDistance = remainingDistance;
   }
 
   return hasRepathed;
@@ -631,15 +673,7 @@ function getPushWeights(unit, otherUnit) {
 }
 
 function getUnitPushWeight(unit) {
-  const direction = getUnitTravelDirection(unit);
-  const remainingDistance = getDistanceBetweenPoints(
-    unit.x,
-    unit.y,
-    unit.destinationX,
-    unit.destinationY,
-  );
-
-  if (!direction || remainingDistance <= UNIT_RADIUS) {
+  if (!unit.isMoving) {
     return PUSH_WEIGHT_IDLE;
   }
 
