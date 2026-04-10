@@ -14,10 +14,38 @@ const UNIT_RADIUS = 10;
 const COLLISION_PASSES = 3;
 const CELL_SIZE = 24;
 const PUSH_WEIGHT_IDLE = 0.35;
-const UNIT_MAX_HEALTH = 100;
-const UNIT_ATTACK_DAMAGE = 10;
-const UNIT_ATTACK_RANGE = 120;
-const UNIT_ATTACK_COOLDOWN = 1.0;
+const UNIT_CLASSES = {
+  UNARMORED: "unarmored",
+  ARMORED: "armored",
+  HELICOPTER: "helicopter",
+  PLANE: "plane"
+};
+
+const UNIT_VARIANTS = {
+  rifleman: {
+    unitClass: UNIT_CLASSES.UNARMORED,
+    maxHealth: 100,
+    attackDamage: 10,
+    attackRange: 120,
+    attackCooldown: 1.0,
+    damageModifiers: {
+      [UNIT_CLASSES.UNARMORED]: 1.0,
+      [UNIT_CLASSES.ARMORED]: 0.2,
+      [UNIT_CLASSES.HELICOPTER]: 0.0,
+      [UNIT_CLASSES.PLANE]: 0.0,
+    },
+    canTarget: [UNIT_CLASSES.UNARMORED, UNIT_CLASSES.ARMORED]
+  },
+  armoredDummy: {
+    unitClass: UNIT_CLASSES.ARMORED,
+    maxHealth: 500,
+    attackDamage: 0,
+    attackRange: 0,
+    attackCooldown: 1.0,
+    damageModifiers: {},
+    canTarget: []
+  }
+};
 const PUSH_WEIGHT_MOVING = 1;
 const STUCK_MOVEMENT_EPSILON = 1.1;
 const STUCK_PROGRESS_EPSILON = 0.75;
@@ -54,12 +82,13 @@ const io = new Server(httpServer, {
 const worldState = {
   obstacles: OBSTACLES,
   units: [
-    createUnit("unit-1", 420, 420, "player"),
-    createUnit("unit-2", 480, 480, "player"),
-    createUnit("unit-3", 440, 560, "player"),
-    createUnit("unit-4", 1720, 1300, "player"),
-    createUnit("unit-5", 1820, 1380, "player"),
-    createUnit("enemy-1", 2000, 2000, "enemy"),
+    createUnit("unit-1", 420, 420, "player", "rifleman"),
+    createUnit("unit-2", 480, 480, "player", "rifleman"),
+    createUnit("unit-3", 440, 560, "player", "rifleman"),
+    createUnit("unit-4", 1720, 1300, "player", "rifleman"),
+    createUnit("unit-5", 1820, 1380, "player", "rifleman"),
+    createUnit("enemy-1", 2000, 2000, "enemy", "rifleman"),
+    createUnit("enemy-2", 2100, 2000, "enemy", "armoredDummy"),
   ],
 };
 
@@ -126,6 +155,10 @@ io.on("connection", (socket) => {
       .filter(Boolean);
 
     for (const unit of units) {
+      if (!unit.canTarget.includes(target.unitClass)) {
+        continue;
+      }
+
       unit.attackTargetId = targetId;
       unit.isAttackMove = false;
       unit.path = [];
@@ -205,31 +238,26 @@ io.on("connection", (socket) => {
   socket.on("player:reset", () => {
     worldState.units = worldState.units.filter((entry) => entry.owner !== "player");
     worldState.units.push(
-      createUnit("unit-1", 420, 420, "player"),
-      createUnit("unit-2", 480, 480, "player"),
-      createUnit("unit-3", 440, 560, "player"),
-      createUnit("unit-4", 1720, 1300, "player"),
-      createUnit("unit-5", 1820, 1380, "player"),
+      createUnit("unit-1", 420, 420, "player", "rifleman"),
+      createUnit("unit-2", 480, 480, "player", "rifleman"),
+      createUnit("unit-3", 440, 560, "player", "rifleman"),
+      createUnit("unit-4", 1720, 1300, "player", "rifleman"),
+      createUnit("unit-5", 1820, 1380, "player", "rifleman"),
     );
 
     io.emit("world:state", serializeWorldState(worldState));
   });
 
   socket.on("enemy:respawn", () => {
-    const existingEnemy = worldState.units.find((entry) => entry.id === "enemy-1");
+    worldState.units = worldState.units.filter((entry) => entry.owner !== "enemy");
 
-    if (existingEnemy && existingEnemy.health > 0) {
-      return;
-    }
-
-    if (existingEnemy) {
-      worldState.units = worldState.units.filter((entry) => entry.id !== "enemy-1");
-    }
-
-    worldState.units.push(createUnit("enemy-1", 2000, 2000, "enemy"));
+    worldState.units.push(
+      createUnit("enemy-1", 2000, 2000, "enemy", "rifleman"),
+      createUnit("enemy-2", 2100, 2000, "enemy", "armoredDummy")
+    );
 
     for (const unit of worldState.units) {
-      if (unit.attackTargetId === "enemy-1") {
+      if (unit.owner === "player" && unit.attackTargetId && worldState.units.find(u => u.id === unit.attackTargetId) === undefined) {
         unit.attackTargetId = null;
         if (unit.isAttackMove) {
           assignUnitPath(unit, { x: unit.attackMoveDestinationX, y: unit.attackMoveDestinationY });
@@ -261,10 +289,14 @@ setInterval(() => {
 
     if (!hasActiveOrder || unit.isAttackMove) {
       let nearestTarget = null;
-      let minDistance = UNIT_ATTACK_RANGE;
+      let minDistance = unit.attackRange;
 
       for (const otherUnit of worldState.units) {
         if (otherUnit.id === unit.id || otherUnit.health <= 0 || otherUnit.owner === unit.owner) {
+          continue;
+        }
+
+        if (!unit.canTarget.includes(otherUnit.unitClass)) {
           continue;
         }
 
@@ -306,13 +338,16 @@ httpServer.listen(PORT, () => {
   console.log(`Dominion Protocol backend listening on port ${PORT}`);
 });
 
-function createUnit(id, x, y, owner = "player") {
+function createUnit(id, x, y, owner = "player", variantId = "rifleman") {
   const clampedX = clamp(x, UNIT_RADIUS, MAP_WIDTH - UNIT_RADIUS);
   const clampedY = clamp(y, UNIT_RADIUS, MAP_HEIGHT - UNIT_RADIUS);
+  const variantProps = UNIT_VARIANTS[variantId];
 
   return {
     id,
     owner,
+    variantId,
+    unitClass: variantProps.unitClass,
     x: clampedX,
     y: clampedY,
     previousX: clampedX,
@@ -325,8 +360,13 @@ function createUnit(id, x, y, owner = "player") {
     path: [],
     stuckTicks: 0,
     repathCooldownTicks: 0,
-    health: UNIT_MAX_HEALTH,
-    maxHealth: UNIT_MAX_HEALTH,
+    health: variantProps.maxHealth,
+    maxHealth: variantProps.maxHealth,
+    attackDamage: variantProps.attackDamage,
+    attackRange: variantProps.attackRange,
+    attackCooldownTime: variantProps.attackCooldown,
+    damageModifiers: variantProps.damageModifiers,
+    canTarget: variantProps.canTarget,
     attackTargetId: null,
     isAttackMove: false,
     attackMoveDestinationX: null,
@@ -344,6 +384,7 @@ function serializeWorldState(state) {
       .map((unit) => ({
         id: unit.id,
         owner: unit.owner,
+        variantId: unit.variantId,
         x: unit.x,
         y: unit.y,
         health: unit.health,
@@ -376,10 +417,10 @@ function processAttacks(units, deltaTime) {
 
     const distance = getDistanceBetweenPoints(unit.x, unit.y, target.x, target.y);
 
-    if (distance > UNIT_ATTACK_RANGE) {
+    if (distance > unit.attackRange) {
       const dx = target.x - unit.x;
       const dy = target.y - unit.y;
-      const stopDistance = UNIT_ATTACK_RANGE * 0.8;
+      const stopDistance = unit.attackRange * 0.8;
       const moveToX = target.x - (dx / distance) * stopDistance;
       const moveToY = target.y - (dy / distance) * stopDistance;
 
@@ -406,8 +447,8 @@ function processAttacks(units, deltaTime) {
       continue;
     }
 
-    target.health = Math.max(0, target.health - UNIT_ATTACK_DAMAGE);
-    unit.attackCooldown = UNIT_ATTACK_COOLDOWN;
+    target.health = Math.max(0, target.health - (unit.attackDamage * (unit.damageModifiers[target.unitClass] ?? 1)));
+    unit.attackCooldown = unit.attackCooldownTime;
     hasChanged = true;
 
     if (target.health <= 0) {
