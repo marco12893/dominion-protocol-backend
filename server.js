@@ -3,7 +3,7 @@ import express from "express";
 import { createServer } from "node:http";
 import { Server } from "socket.io";
 
-const PORT = Number(process.env.PORT ?? 4000);
+const PORT = Number(process.env.PORT ?? 10000);
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN ?? "http://localhost:3000";
 const MAP_WIDTH = 960;
 const MAP_HEIGHT = 540;
