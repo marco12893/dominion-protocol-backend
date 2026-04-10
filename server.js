@@ -44,6 +44,20 @@ const UNIT_VARIANTS = {
     attackCooldown: 1.0,
     damageModifiers: {},
     canTarget: []
+  },
+  antiTank: {
+    unitClass: UNIT_CLASSES.UNARMORED,
+    maxHealth: 100,
+    attackDamage: 40,
+    attackRange: 160,
+    attackCooldown: 2.0,
+    damageModifiers: {
+      [UNIT_CLASSES.UNARMORED]: 0.3,
+      [UNIT_CLASSES.ARMORED]: 1.0,
+      [UNIT_CLASSES.HELICOPTER]: 1.0,
+      [UNIT_CLASSES.PLANE]: 0.0,
+    },
+    canTarget: [UNIT_CLASSES.UNARMORED, UNIT_CLASSES.ARMORED, UNIT_CLASSES.HELICOPTER]
   }
 };
 const PUSH_WEIGHT_MOVING = 1;
@@ -87,6 +101,11 @@ const worldState = {
     createUnit("unit-3", 440, 560, "player", "rifleman"),
     createUnit("unit-4", 1720, 1300, "player", "rifleman"),
     createUnit("unit-5", 1820, 1380, "player", "rifleman"),
+    createUnit("unit-at-1", 450, 420, "player", "antiTank"),
+    createUnit("unit-at-2", 510, 480, "player", "antiTank"),
+    createUnit("unit-at-3", 470, 560, "player", "antiTank"),
+    createUnit("unit-at-4", 1750, 1300, "player", "antiTank"),
+    createUnit("unit-at-5", 1850, 1380, "player", "antiTank"),
     createUnit("enemy-1", 2000, 2000, "enemy", "rifleman"),
     createUnit("enemy-2", 2100, 2000, "enemy", "armoredDummy"),
   ],
@@ -243,6 +262,11 @@ io.on("connection", (socket) => {
       createUnit("unit-3", 440, 560, "player", "rifleman"),
       createUnit("unit-4", 1720, 1300, "player", "rifleman"),
       createUnit("unit-5", 1820, 1380, "player", "rifleman"),
+      createUnit("unit-at-1", 450, 420, "player", "antiTank"),
+      createUnit("unit-at-2", 510, 480, "player", "antiTank"),
+      createUnit("unit-at-3", 470, 560, "player", "antiTank"),
+      createUnit("unit-at-4", 1750, 1300, "player", "antiTank"),
+      createUnit("unit-at-5", 1850, 1380, "player", "antiTank"),
     );
 
     io.emit("world:state", serializeWorldState(worldState));
@@ -373,6 +397,7 @@ function createUnit(id, x, y, owner = "player", variantId = "rifleman") {
     attackMoveDestinationY: null,
     attackCooldown: 0,
     isMoving: false,
+    isFiring: false,
   };
 }
 
@@ -389,7 +414,8 @@ function serializeWorldState(state) {
         y: unit.y,
         health: unit.health,
         maxHealth: unit.maxHealth,
-        attackTargetId: unit.attackTargetId,
+        attackTargetId: unit.attackTargetId || null,
+        isFiring: !!unit.isFiring,
       })),
   };
 }
@@ -398,6 +424,8 @@ function processAttacks(units, deltaTime) {
   let hasChanged = false;
 
   for (const unit of units) {
+    unit.isFiring = false;
+
     if (unit.health <= 0 || !unit.attackTargetId) {
       continue;
     }
@@ -442,12 +470,24 @@ function processAttacks(units, deltaTime) {
     unit.destinationY = unit.y;
     unit.isMoving = false;
 
+    unit.isFiring = true;
+    hasChanged = true;
+
     if (unit.attackCooldown > 0) {
       unit.attackCooldown -= deltaTime;
       continue;
     }
 
     target.health = Math.max(0, target.health - (unit.attackDamage * (unit.damageModifiers[target.unitClass] ?? 1)));
+    
+    // Counter-attack logic: if target is idle, retaliate against attacker
+    if (target.health > 0 && !target.attackTargetId) {
+      // Check if target can actually hit the attacker
+      if (target.canTarget.includes(unit.unitClass)) {
+        target.attackTargetId = unit.id;
+      }
+    }
+
     unit.attackCooldown = unit.attackCooldownTime;
     hasChanged = true;
 
