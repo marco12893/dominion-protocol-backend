@@ -5,8 +5,8 @@ import { Server } from "socket.io";
 
 const PORT = Number(process.env.PORT ?? 10000);
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN ?? "http://localhost:3000";
-const MAP_WIDTH = 960;
-const MAP_HEIGHT = 540;
+const MAP_WIDTH = 3200;
+const MAP_HEIGHT = 3200;
 const TICK_RATE = 60;
 const UNIT_SPEED = 180;
 const FORMATION_SPACING = 28;
@@ -26,10 +26,10 @@ const REPATH_COOLDOWN_TICKS = 12;
 const GRID_COLUMNS = Math.ceil(MAP_WIDTH / CELL_SIZE);
 const GRID_ROWS = Math.ceil(MAP_HEIGHT / CELL_SIZE);
 const OBSTACLES = [
-  { id: "rock-1", x: 240, y: 110, width: 150, height: 90 },
-  { id: "rock-2", x: 470, y: 250, width: 120, height: 140 },
-  { id: "rock-3", x: 690, y: 90, width: 120, height: 100 },
-  { id: "rock-4", x: 150, y: 350, width: 180, height: 90 },
+  { id: "rock-1", x: 640, y: 510, width: 350, height: 290 },
+  { id: "rock-2", x: 1470, y: 1250, width: 320, height: 440 },
+  { id: "rock-3", x: 2190, y: 890, width: 420, height: 300 },
+  { id: "rock-4", x: 850, y: 2350, width: 480, height: 290 },
 ];
 const WALKABLE_GRID = buildWalkableGrid();
 
@@ -54,12 +54,12 @@ const io = new Server(httpServer, {
 const worldState = {
   obstacles: OBSTACLES,
   units: [
-    createUnit("unit-1", 120, 120, "player"),
-    createUnit("unit-2", 180, 180, "player"),
-    createUnit("unit-3", 140, 260, "player"),
-    createUnit("unit-4", 720, 300, "player"),
-    createUnit("unit-5", 820, 380, "player"),
-    createUnit("enemy-1", 800, 200, "enemy"),
+    createUnit("unit-1", 420, 420, "player"),
+    createUnit("unit-2", 480, 480, "player"),
+    createUnit("unit-3", 440, 560, "player"),
+    createUnit("unit-4", 1720, 1300, "player"),
+    createUnit("unit-5", 1820, 1380, "player"),
+    createUnit("enemy-1", 2000, 2000, "enemy"),
   ],
 };
 
@@ -205,11 +205,11 @@ io.on("connection", (socket) => {
   socket.on("player:reset", () => {
     worldState.units = worldState.units.filter((entry) => entry.owner !== "player");
     worldState.units.push(
-      createUnit("unit-1", 120, 120, "player"),
-      createUnit("unit-2", 180, 180, "player"),
-      createUnit("unit-3", 140, 260, "player"),
-      createUnit("unit-4", 720, 300, "player"),
-      createUnit("unit-5", 820, 380, "player"),
+      createUnit("unit-1", 420, 420, "player"),
+      createUnit("unit-2", 480, 480, "player"),
+      createUnit("unit-3", 440, 560, "player"),
+      createUnit("unit-4", 1720, 1300, "player"),
+      createUnit("unit-5", 1820, 1380, "player"),
     );
 
     io.emit("world:state", serializeWorldState(worldState));
@@ -226,7 +226,7 @@ io.on("connection", (socket) => {
       worldState.units = worldState.units.filter((entry) => entry.id !== "enemy-1");
     }
 
-    worldState.units.push(createUnit("enemy-1", 800, 200, "enemy"));
+    worldState.units.push(createUnit("enemy-1", 2000, 2000, "enemy"));
 
     for (const unit of worldState.units) {
       if (unit.attackTargetId === "enemy-1") {
