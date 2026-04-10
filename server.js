@@ -14,6 +14,10 @@ const UNIT_RADIUS = 10;
 const COLLISION_PASSES = 3;
 const CELL_SIZE = 24;
 const PUSH_WEIGHT_IDLE = 0.35;
+const UNIT_MAX_HEALTH = 100;
+const UNIT_ATTACK_DAMAGE = 10;
+const UNIT_ATTACK_RANGE = 120;
+const UNIT_ATTACK_COOLDOWN = 1.0;
 const PUSH_WEIGHT_MOVING = 1;
 const STUCK_MOVEMENT_EPSILON = 1.1;
 const STUCK_PROGRESS_EPSILON = 0.75;
@@ -50,11 +54,12 @@ const io = new Server(httpServer, {
 const worldState = {
   obstacles: OBSTACLES,
   units: [
-    createUnit("unit-1", 120, 120),
-    createUnit("unit-2", 180, 180),
-    createUnit("unit-3", 140, 260),
-    createUnit("unit-4", 720, 300),
-    createUnit("unit-5", 820, 380),
+    createUnit("unit-1", 120, 120, "player"),
+    createUnit("unit-2", 180, 180, "player"),
+    createUnit("unit-3", 140, 260, "player"),
+    createUnit("unit-4", 720, 300, "player"),
+    createUnit("unit-5", 820, 380, "player"),
+    createUnit("enemy-1", 800, 200, "enemy"),
   ],
 };
 
@@ -74,11 +79,15 @@ io.on("connection", (socket) => {
     }
 
     const units = unitIds
-      .map((unitId) => worldState.units.find((entry) => entry.id === unitId))
+      .map((unitId) => worldState.units.find((entry) => entry.id === unitId && entry.owner === "player"))
       .filter(Boolean);
 
     if (units.length === 0) {
       return;
+    }
+
+    for (const unit of units) {
+      unit.attackTargetId = null;
     }
 
     const slots = buildFormation(units.length, {
@@ -93,18 +102,80 @@ io.on("connection", (socket) => {
 
     io.emit("world:state", serializeWorldState(worldState));
   });
+
+  socket.on("unit:attack", ({ unitIds, targetId }) => {
+    if (
+      !Array.isArray(unitIds) ||
+      unitIds.length === 0 ||
+      typeof targetId !== "string"
+    ) {
+      return;
+    }
+
+    const target = worldState.units.find(
+      (entry) => entry.id === targetId && entry.owner === "enemy" && entry.health > 0,
+    );
+
+    if (!target) {
+      return;
+    }
+
+    const units = unitIds
+      .map((unitId) => worldState.units.find((entry) => entry.id === unitId && entry.owner === "player"))
+      .filter(Boolean);
+
+    for (const unit of units) {
+      unit.attackTargetId = targetId;
+      unit.path = [];
+      unit.targetX = unit.x;
+      unit.targetY = unit.y;
+      unit.destinationX = unit.x;
+      unit.destinationY = unit.y;
+    }
+
+    io.emit("world:state", serializeWorldState(worldState));
+  });
+
+  socket.on("enemy:respawn", () => {
+    const existingEnemy = worldState.units.find((entry) => entry.id === "enemy-1");
+
+    if (existingEnemy && existingEnemy.health > 0) {
+      return;
+    }
+
+    if (existingEnemy) {
+      worldState.units = worldState.units.filter((entry) => entry.id !== "enemy-1");
+    }
+
+    worldState.units.push(createUnit("enemy-1", 800, 200, "enemy"));
+
+    for (const unit of worldState.units) {
+      if (unit.attackTargetId === "enemy-1") {
+        unit.attackTargetId = null;
+      }
+    }
+
+    io.emit("world:state", serializeWorldState(worldState));
+  });
 });
 
 setInterval(() => {
   let hasMoved = false;
 
+  hasMoved = processAttacks(worldState.units, 1 / TICK_RATE) || hasMoved;
+
   for (const unit of worldState.units) {
+    if (unit.health <= 0) {
+      continue;
+    }
+
     hasMoved = advanceUnit(unit, 1 / TICK_RATE) || hasMoved;
   }
 
-  hasMoved = resolveObstacleCollisions(worldState.units) || hasMoved;
-  hasMoved = resolveUnitCollisions(worldState.units) || hasMoved;
-  hasMoved = detectAndResolveDeadlocks(worldState.units) || hasMoved;
+  const aliveUnits = worldState.units.filter((unit) => unit.health > 0);
+  hasMoved = resolveObstacleCollisions(aliveUnits) || hasMoved;
+  hasMoved = resolveUnitCollisions(aliveUnits) || hasMoved;
+  hasMoved = detectAndResolveDeadlocks(aliveUnits) || hasMoved;
 
   if (hasMoved) {
     io.emit("world:state", serializeWorldState(worldState));
@@ -115,12 +186,13 @@ httpServer.listen(PORT, () => {
   console.log(`Dominion Protocol backend listening on port ${PORT}`);
 });
 
-function createUnit(id, x, y) {
+function createUnit(id, x, y, owner = "player") {
   const clampedX = clamp(x, UNIT_RADIUS, MAP_WIDTH - UNIT_RADIUS);
   const clampedY = clamp(y, UNIT_RADIUS, MAP_HEIGHT - UNIT_RADIUS);
 
   return {
     id,
+    owner,
     x: clampedX,
     y: clampedY,
     previousX: clampedX,
@@ -133,18 +205,93 @@ function createUnit(id, x, y) {
     path: [],
     stuckTicks: 0,
     repathCooldownTicks: 0,
+    health: UNIT_MAX_HEALTH,
+    maxHealth: UNIT_MAX_HEALTH,
+    attackTargetId: null,
+    attackCooldown: 0,
   };
 }
 
 function serializeWorldState(state) {
   return {
     obstacles: state.obstacles,
-    units: state.units.map((unit) => ({
-      id: unit.id,
-      x: unit.x,
-      y: unit.y,
-    })),
+    units: state.units
+      .filter((unit) => unit.health > 0)
+      .map((unit) => ({
+        id: unit.id,
+        owner: unit.owner,
+        x: unit.x,
+        y: unit.y,
+        health: unit.health,
+        maxHealth: unit.maxHealth,
+        attackTargetId: unit.attackTargetId,
+      })),
   };
+}
+
+function processAttacks(units, deltaTime) {
+  let hasChanged = false;
+
+  for (const unit of units) {
+    if (unit.health <= 0 || !unit.attackTargetId) {
+      continue;
+    }
+
+    const target = units.find(
+      (entry) => entry.id === unit.attackTargetId && entry.health > 0,
+    );
+
+    if (!target) {
+      unit.attackTargetId = null;
+      hasChanged = true;
+      continue;
+    }
+
+    const distance = getDistanceBetweenPoints(unit.x, unit.y, target.x, target.y);
+
+    if (distance > UNIT_ATTACK_RANGE) {
+      const dx = target.x - unit.x;
+      const dy = target.y - unit.y;
+      const stopDistance = UNIT_ATTACK_RANGE * 0.8;
+      const moveToX = target.x - (dx / distance) * stopDistance;
+      const moveToY = target.y - (dy / distance) * stopDistance;
+
+      if (
+        Math.abs(unit.destinationX - moveToX) > 5 ||
+        Math.abs(unit.destinationY - moveToY) > 5
+      ) {
+        assignUnitPath(unit, { x: moveToX, y: moveToY });
+        hasChanged = true;
+      }
+
+      continue;
+    }
+
+    unit.path = [];
+    unit.targetX = unit.x;
+    unit.targetY = unit.y;
+    unit.destinationX = unit.x;
+    unit.destinationY = unit.y;
+
+    if (unit.attackCooldown > 0) {
+      unit.attackCooldown -= deltaTime;
+      continue;
+    }
+
+    target.health = Math.max(0, target.health - UNIT_ATTACK_DAMAGE);
+    unit.attackCooldown = UNIT_ATTACK_COOLDOWN;
+    hasChanged = true;
+
+    if (target.health <= 0) {
+      for (const attacker of units) {
+        if (attacker.attackTargetId === target.id) {
+          attacker.attackTargetId = null;
+        }
+      }
+    }
+  }
+
+  return hasChanged;
 }
 
 function assignUnitPath(unit, desiredDestination) {
