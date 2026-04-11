@@ -14,6 +14,9 @@ const UNIT_RADIUS = 10;
 const COLLISION_PASSES = 3;
 const CELL_SIZE = 24;
 const PUSH_WEIGHT_IDLE = 0.35;
+const STARTING_RESOURCES = 3000;
+const DEPLOYMENT_GRID_COLS = 5;
+const DEPLOYMENT_GRID_SPACING = 50;
 const UNIT_CLASSES = {
   UNARMORED: "unarmored",
   ARMORED: "armored",
@@ -30,6 +33,7 @@ const UNIT_VARIANTS = {
     attackCooldown: 0.5,
     defense: 0,
     speed: 180,
+    cost: 100,
     damageModifiers: {
       [UNIT_CLASSES.UNARMORED]: 1.0,
       [UNIT_CLASSES.ARMORED]: 0.15,
@@ -46,8 +50,9 @@ const UNIT_VARIANTS = {
     attackCooldown: 0.6,
     defense: 6,
     speed: 230,
+    cost: 500,
     damageModifiers: {
-      [UNIT_CLASSES.UNARMORED]: 0.9,
+      [UNIT_CLASSES.UNARMORED]: 1.0,
       [UNIT_CLASSES.ARMORED]: 0.25,
       [UNIT_CLASSES.HELICOPTER]: 0.0,
       [UNIT_CLASSES.PLANE]: 0.0,
@@ -62,6 +67,7 @@ const UNIT_VARIANTS = {
     attackCooldown: 1.2,
     defense: 3,
     speed: 280,
+    cost: 850,
     damageModifiers: {
       [UNIT_CLASSES.UNARMORED]: 0.35,
       [UNIT_CLASSES.ARMORED]: 1.0,
@@ -78,6 +84,7 @@ const UNIT_VARIANTS = {
     attackCooldown: 1.0,
     defense: 2,
     speed: 0,
+    cost: 1000,
     damageModifiers: {},
     canTarget: []
   },
@@ -89,9 +96,10 @@ const UNIT_VARIANTS = {
     attackCooldown: 2.0,
     defense: 0,
     speed: 140,
+    cost: 250,
     damageModifiers: {
       [UNIT_CLASSES.UNARMORED]: 0.25,
-      [UNIT_CLASSES.ARMORED]: 0.9,
+      [UNIT_CLASSES.ARMORED]: 1.0,
       [UNIT_CLASSES.HELICOPTER]: 1.0,
       [UNIT_CLASSES.PLANE]: 0.0,
     },
@@ -135,8 +143,8 @@ const worldState = {
   obstacles: OBSTACLES,
   units: [],
   teamSelections: {
-    blue: { socketId: null, isOnline: false },
-    red: { socketId: null, isOnline: false }
+    blue: { socketId: null, isOnline: false, hasDeployed: false },
+    red: { socketId: null, isOnline: false, hasDeployed: false }
   }
 };
 
@@ -216,29 +224,43 @@ io.on("connection", (socket) => {
     worldState.teamSelections[color].isOnline = true;
     playerAssignments.set(socket.id, color);
 
-    // Spawn units if they don't exist for this color
-    const existingUnits = worldState.units.filter(u => u.owner === color);
-    if (existingUnits.length === 0) {
-      const baseX = color === "blue" ? 400 : 2800;
-      const baseY = color === "blue" ? 400 : 2800;
-      
-      const newUnits = [
-        createUnit(`${color}-r-1`, baseX, baseY, color, "rifleman"),
-        createUnit(`${color}-r-2`, baseX + 60, baseY + 60, color, "rifleman"),
-        createUnit(`${color}-r-3`, baseX + 20, baseY + 140, color, "rifleman"),
-        createUnit(`${color}-r-4`, baseX + 100, baseY, color, "rifleman"),
-        createUnit(`${color}-r-5`, baseX + 140, baseY + 40, color, "rifleman"),
-        createUnit(`${color}-at-1`, baseX + 30, baseY, color, "antiTank"),
-        createUnit(`${color}-at-2`, baseX + 90, baseY + 60, color, "antiTank"),
-        createUnit(`${color}-at-3`, baseX + 50, baseY + 140, color, "antiTank"),
-        createUnit(`${color}-at-4`, baseX + 130, baseY, color, "antiTank"),
-        createUnit(`${color}-at-5`, baseX + 170, baseY + 40, color, "antiTank"),
-        createUnit(`${color}-ac-1`, baseX + 50, baseY - 60, color, "armoredCar"),
-        createUnit(`${color}-lt-1`, baseX + 150, baseY - 60, color, "lightTank"),
-      ];
-      worldState.units.push(...newUnits);
+    io.emit("world:state", serializeWorldState(worldState));
+  });
+
+  socket.on("player:deploy", (manifest) => {
+    const color = playerAssignments.get(socket.id);
+    if (!color || worldState.teamSelections[color].hasDeployed) return;
+
+    // Validate Manifest
+    let totalCost = 0;
+    for (const [variantId, count] of Object.entries(manifest)) {
+      if (!UNIT_VARIANTS[variantId] || count <= 0) continue;
+      totalCost += UNIT_VARIANTS[variantId].cost * count;
     }
 
+    if (totalCost > STARTING_RESOURCES) return;
+
+    // Spawn in Grid
+    const spawnX = color === "blue" ? 400 : 2800;
+    const spawnY = color === "blue" ? 400 : 2800;
+    const direction = color === "blue" ? 1 : -1;
+
+    let index = 0;
+    for (const [variantId, count] of Object.entries(manifest)) {
+      for (let i = 0; i < count; i++) {
+        const col = index % DEPLOYMENT_GRID_COLS;
+        const row = Math.floor(index / DEPLOYMENT_GRID_COLS);
+        
+        const x = spawnX + col * DEPLOYMENT_GRID_SPACING * direction;
+        const y = spawnY + row * DEPLOYMENT_GRID_SPACING * direction;
+        
+        const unit = createUnit(`${color}-${variantId}-${i}-${Date.now()}`, x, y, color, variantId);
+        worldState.units.push(unit);
+        index++;
+      }
+    }
+
+    worldState.teamSelections[color].hasDeployed = true;
     io.emit("world:state", serializeWorldState(worldState));
   });
 
