@@ -25,12 +25,46 @@ const UNIT_VARIANTS = {
   rifleman: {
     unitClass: UNIT_CLASSES.UNARMORED,
     maxHealth: 100,
-    attackDamage: 8,
+    attackDamage: 10,
     attackRange: 120,
     attackCooldown: 0.5,
+    defense: 0,
+    speed: 180,
     damageModifiers: {
       [UNIT_CLASSES.UNARMORED]: 1.0,
-      [UNIT_CLASSES.ARMORED]: 0.2,
+      [UNIT_CLASSES.ARMORED]: 0.15,
+      [UNIT_CLASSES.HELICOPTER]: 0.0,
+      [UNIT_CLASSES.PLANE]: 0.0,
+    },
+    canTarget: [UNIT_CLASSES.UNARMORED, UNIT_CLASSES.ARMORED]
+  },
+  armoredCar: {
+    unitClass: UNIT_CLASSES.ARMORED,
+    maxHealth: 150,
+    attackDamage: 20,
+    attackRange: 140,
+    attackCooldown: 0.6,
+    defense: 6,
+    speed: 230,
+    damageModifiers: {
+      [UNIT_CLASSES.UNARMORED]: 0.9,
+      [UNIT_CLASSES.ARMORED]: 0.25,
+      [UNIT_CLASSES.HELICOPTER]: 0.0,
+      [UNIT_CLASSES.PLANE]: 0.0,
+    },
+    canTarget: [UNIT_CLASSES.UNARMORED, UNIT_CLASSES.ARMORED]
+  },
+  lightTank: {
+    unitClass: UNIT_CLASSES.ARMORED,
+    maxHealth: 300,
+    attackDamage: 50,
+    attackRange: 180,
+    attackCooldown: 1.2,
+    defense: 3,
+    speed: 280,
+    damageModifiers: {
+      [UNIT_CLASSES.UNARMORED]: 0.35,
+      [UNIT_CLASSES.ARMORED]: 1.0,
       [UNIT_CLASSES.HELICOPTER]: 0.0,
       [UNIT_CLASSES.PLANE]: 0.0,
     },
@@ -42,18 +76,22 @@ const UNIT_VARIANTS = {
     attackDamage: 0,
     attackRange: 0,
     attackCooldown: 1.0,
+    defense: 2,
+    speed: 0,
     damageModifiers: {},
     canTarget: []
   },
   antiTank: {
     unitClass: UNIT_CLASSES.UNARMORED,
     maxHealth: 100,
-    attackDamage: 40,
+    attackDamage: 45,
     attackRange: 160,
     attackCooldown: 2.0,
+    defense: 0,
+    speed: 140,
     damageModifiers: {
-      [UNIT_CLASSES.UNARMORED]: 0.3,
-      [UNIT_CLASSES.ARMORED]: 1.0,
+      [UNIT_CLASSES.UNARMORED]: 0.25,
+      [UNIT_CLASSES.ARMORED]: 0.9,
       [UNIT_CLASSES.HELICOPTER]: 1.0,
       [UNIT_CLASSES.PLANE]: 0.0,
     },
@@ -195,6 +233,8 @@ io.on("connection", (socket) => {
         createUnit(`${color}-at-3`, baseX + 50, baseY + 140, color, "antiTank"),
         createUnit(`${color}-at-4`, baseX + 130, baseY, color, "antiTank"),
         createUnit(`${color}-at-5`, baseX + 170, baseY + 40, color, "antiTank"),
+        createUnit(`${color}-ac-1`, baseX + 50, baseY - 60, color, "armoredCar"),
+        createUnit(`${color}-lt-1`, baseX + 150, baseY - 60, color, "lightTank"),
       ];
       worldState.units.push(...newUnits);
     }
@@ -501,6 +541,8 @@ function createUnit(id, x, y, owner = "player", variantId = "rifleman") {
     isMoving: false,
     isFiring: false,
     isHoldingPosition: false,
+    defense: variantProps.defense || 0,
+    speed: variantProps.speed || UNIT_SPEED,
     orderQueue: [],
     kills: 0,
   };
@@ -524,7 +566,7 @@ function serializeWorldState(state) {
         attackDamage: unit.attackDamage,
         attackRange: unit.attackRange,
         attackCooldownTime: unit.attackCooldownTime,
-        armor: 0,
+        armor: unit.defense || 0,
         kills: unit.kills || 0,
         attackTargetId: unit.attackTargetId || null,
         isFiring: !!unit.isFiring,
@@ -598,7 +640,9 @@ function processAttacks(units, deltaTime) {
       continue;
     }
 
-    target.health = Math.max(0, target.health - (unit.attackDamage * (unit.damageModifiers[target.unitClass] ?? 1)));
+    const initialDamage = unit.attackDamage * (unit.damageModifiers[target.unitClass] ?? 1);
+    const finalDamage = Math.max(1, initialDamage - (target.defense || 0));
+    target.health = Math.max(0, target.health - finalDamage);
     
     // Counter-attack logic: if target is idle, retaliate against attacker
     if (target.health > 0 && !target.attackTargetId) {
@@ -709,7 +753,7 @@ function advanceUnit(unit, deltaTime) {
     return progressed || distance !== 0;
   }
 
-  const maxStep = UNIT_SPEED * deltaTime;
+  const maxStep = (unit.speed || UNIT_SPEED) * deltaTime;
   const step = Math.min(distance, maxStep);
 
   unit.x += (dx / distance) * step;
