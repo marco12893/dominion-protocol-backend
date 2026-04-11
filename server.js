@@ -407,8 +407,10 @@ io.on("connection", (socket) => {
     worldState.units = [];
     worldState.teamSelections.blue.socketId = null;
     worldState.teamSelections.blue.isOnline = false;
+    worldState.teamSelections.blue.hasDeployed = false;
     worldState.teamSelections.red.socketId = null;
     worldState.teamSelections.red.isOnline = false;
+    worldState.teamSelections.red.hasDeployed = false;
     playerAssignments.clear();
 
     io.emit("game:reset");
@@ -654,8 +656,6 @@ function processAttacks(units, deltaTime) {
     unit.targetY = unit.y;
     unit.destinationX = unit.x;
     unit.destinationY = unit.y;
-    unit.isMoving = false;
-
     unit.isFiring = true;
     hasChanged = true;
 
@@ -666,30 +666,84 @@ function processAttacks(units, deltaTime) {
 
     const initialDamage = unit.attackDamage * (unit.damageModifiers[target.unitClass] ?? 1);
     const finalDamage = Math.max(1, initialDamage - (target.defense || 0));
-    target.health = Math.max(0, target.health - finalDamage);
-    
-    // Counter-attack logic: if target is idle, retaliate against attacker
-    if (target.health > 0 && !target.attackTargetId) {
-      // Check if target can actually hit the attacker
-      if (target.canTarget.includes(unit.unitClass)) {
-        target.attackTargetId = unit.id;
+
+    if (unit.variantId === "antiTank") {
+      // Missile logic
+      const distance = getDistanceBetweenPoints(unit.x, unit.y, target.x, target.y);
+      const flightTime = distance / 450; // 450px/s speed
+
+      io.emit("unit:shootProjectile", {
+        id: `projectile-${unit.id}-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        shooterId: unit.id,
+        targetId: target.id,
+        startX: unit.x,
+        startY: unit.y,
+        damage: finalDamage,
+        speed: 450
+      });
+
+      setTimeout(() => {
+        // Find target again as it might have moved or died
+        const currentTarget = worldState.units.find(u => u.id === target.id);
+        if (currentTarget && currentTarget.health > 0) {
+          currentTarget.health = Math.max(0, currentTarget.health - finalDamage);
+          if (currentTarget.health <= 0) {
+            unit.kills = (unit.kills || 0) + 1;
+            // Clean up other units' targets
+            for (const attacker of worldState.units) {
+              if (attacker.attackTargetId === currentTarget.id) {
+                attacker.attackTargetId = null;
+                if (attacker.isAttackMove) {
+                  assignUnitPath(attacker, { x: attacker.attackMoveDestinationX, y: attacker.attackMoveDestinationY });
+                }
+              }
+            }
+          }
+          // Retaliation logic
+          if (currentTarget.health > 0 && !currentTarget.attackTargetId) {
+            if (currentTarget.canTarget.includes(unit.unitClass)) {
+              currentTarget.attackTargetId = unit.id;
+            }
+          }
+        }
+      }, flightTime * 1000);
+    } else {
+      // Normal instant damage
+      target.health = Math.max(0, target.health - finalDamage);
+
+      // Emit attack event for hitscan visuals
+      io.emit("unit:attack", {
+        id: `atk-${unit.id}-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        unitId: unit.id,
+        targetId: target.id,
+        shooterPos: { x: unit.x, y: unit.y },
+        targetPos: { x: target.x, y: target.y },
+        variantId: unit.variantId
+      });
+      
+      // Counter-attack logic: if target is idle, retaliate against attacker
+      if (target.health > 0 && !target.attackTargetId) {
+        if (target.canTarget.includes(unit.unitClass)) {
+          target.attackTargetId = unit.id;
+        }
+      }
+
+      if (target.health <= 0) {
+        unit.kills = (unit.kills || 0) + 1;
+        for (const attacker of worldState.units) {
+          if (attacker.attackTargetId === target.id) {
+            attacker.attackTargetId = null;
+            if (attacker.isAttackMove) {
+              assignUnitPath(attacker, { x: attacker.attackMoveDestinationX, y: attacker.attackMoveDestinationY });
+            }
+          }
+        }
       }
     }
 
     unit.attackCooldown = unit.attackCooldownTime;
     hasChanged = true;
-
-    if (target.health <= 0) {
-      unit.kills = (unit.kills || 0) + 1;
-      for (const attacker of units) {
-        if (attacker.attackTargetId === target.id) {
-          attacker.attackTargetId = null;
-          if (attacker.isAttackMove) {
-            assignUnitPath(attacker, { x: attacker.attackMoveDestinationX, y: attacker.attackMoveDestinationY });
-          }
-        }
-      }
-    }
+    continue;
   }
 
   return hasChanged;
