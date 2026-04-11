@@ -25,9 +25,9 @@ const UNIT_VARIANTS = {
   rifleman: {
     unitClass: UNIT_CLASSES.UNARMORED,
     maxHealth: 100,
-    attackDamage: 10,
+    attackDamage: 8,
     attackRange: 120,
-    attackCooldown: 1.0,
+    attackCooldown: 0.5,
     damageModifiers: {
       [UNIT_CLASSES.UNARMORED]: 1.0,
       [UNIT_CLASSES.ARMORED]: 0.2,
@@ -95,21 +95,14 @@ const io = new Server(httpServer, {
 
 const worldState = {
   obstacles: OBSTACLES,
-  units: [
-    createUnit("unit-1", 420, 420, "player", "rifleman"),
-    createUnit("unit-2", 480, 480, "player", "rifleman"),
-    createUnit("unit-3", 440, 560, "player", "rifleman"),
-    createUnit("unit-4", 1720, 1300, "player", "rifleman"),
-    createUnit("unit-5", 1820, 1380, "player", "rifleman"),
-    createUnit("unit-at-1", 450, 420, "player", "antiTank"),
-    createUnit("unit-at-2", 510, 480, "player", "antiTank"),
-    createUnit("unit-at-3", 470, 560, "player", "antiTank"),
-    createUnit("unit-at-4", 1750, 1300, "player", "antiTank"),
-    createUnit("unit-at-5", 1850, 1380, "player", "antiTank"),
-    createUnit("enemy-1", 2000, 2000, "enemy", "rifleman"),
-    createUnit("enemy-2", 2100, 2000, "enemy", "armoredDummy"),
-  ],
+  units: [],
+  teamSelections: {
+    blue: { socketId: null, isOnline: false },
+    red: { socketId: null, isOnline: false }
+  }
 };
+
+const playerAssignments = new Map(); // socket.id -> color
 
 function executeOrder(unit, order) {
   if (order.type === 'move') {
@@ -174,7 +167,44 @@ function processUnitOrder(unit, order, isQueued) {
 io.on("connection", (socket) => {
   socket.emit("world:state", serializeWorldState(worldState));
 
+  socket.on("player:join", (color) => {
+    if (color !== "blue" && color !== "red") return;
+    if (worldState.teamSelections[color].socketId && worldState.teamSelections[color].isOnline) {
+      return; // Already taken and online
+    }
+
+    // Assign player
+    worldState.teamSelections[color].socketId = socket.id;
+    worldState.teamSelections[color].isOnline = true;
+    playerAssignments.set(socket.id, color);
+
+    // Spawn units if they don't exist for this color
+    const existingUnits = worldState.units.filter(u => u.owner === color);
+    if (existingUnits.length === 0) {
+      const baseX = color === "blue" ? 400 : 2800;
+      const baseY = color === "blue" ? 400 : 2800;
+      
+      const newUnits = [
+        createUnit(`${color}-r-1`, baseX, baseY, color, "rifleman"),
+        createUnit(`${color}-r-2`, baseX + 60, baseY + 60, color, "rifleman"),
+        createUnit(`${color}-r-3`, baseX + 20, baseY + 140, color, "rifleman"),
+        createUnit(`${color}-r-4`, baseX + 100, baseY, color, "rifleman"),
+        createUnit(`${color}-r-5`, baseX + 140, baseY + 40, color, "rifleman"),
+        createUnit(`${color}-at-1`, baseX + 30, baseY, color, "antiTank"),
+        createUnit(`${color}-at-2`, baseX + 90, baseY + 60, color, "antiTank"),
+        createUnit(`${color}-at-3`, baseX + 50, baseY + 140, color, "antiTank"),
+        createUnit(`${color}-at-4`, baseX + 130, baseY, color, "antiTank"),
+        createUnit(`${color}-at-5`, baseX + 170, baseY + 40, color, "antiTank"),
+      ];
+      worldState.units.push(...newUnits);
+    }
+
+    io.emit("world:state", serializeWorldState(worldState));
+  });
+
   socket.on("unit:move", ({ unitIds, position, isQueued }) => {
+    const playerColor = playerAssignments.get(socket.id);
+    if (!playerColor) return;
     if (
       !Array.isArray(unitIds) ||
       unitIds.length === 0 ||
@@ -187,7 +217,7 @@ io.on("connection", (socket) => {
     }
 
     const units = unitIds
-      .map((unitId) => worldState.units.find((entry) => entry.id === unitId && entry.owner === "player"))
+      .map((unitId) => worldState.units.find((entry) => entry.id === unitId && entry.owner === playerColor))
       .filter(Boolean);
 
     if (units.length === 0) {
@@ -208,6 +238,8 @@ io.on("connection", (socket) => {
   });
 
   socket.on("unit:attack", ({ unitIds, targetId, isQueued }) => {
+    const playerColor = playerAssignments.get(socket.id);
+    if (!playerColor) return;
     if (
       !Array.isArray(unitIds) ||
       unitIds.length === 0 ||
@@ -217,7 +249,7 @@ io.on("connection", (socket) => {
     }
 
     const target = worldState.units.find(
-      (entry) => entry.id === targetId && entry.owner === "enemy" && entry.health > 0,
+      (entry) => entry.id === targetId && entry.owner !== playerColor && entry.health > 0,
     );
 
     if (!target) {
@@ -225,7 +257,7 @@ io.on("connection", (socket) => {
     }
 
     const units = unitIds
-      .map((unitId) => worldState.units.find((entry) => entry.id === unitId && entry.owner === "player"))
+      .map((unitId) => worldState.units.find((entry) => entry.id === unitId && entry.owner === playerColor))
       .filter(Boolean);
 
     for (const unit of units) {
@@ -239,6 +271,8 @@ io.on("connection", (socket) => {
   });
 
   socket.on("unit:attackMove", ({ unitIds, position, isQueued }) => {
+    const playerColor = playerAssignments.get(socket.id);
+    if (!playerColor) return;
     if (
       !Array.isArray(unitIds) ||
       unitIds.length === 0 ||
@@ -251,7 +285,7 @@ io.on("connection", (socket) => {
     }
 
     const units = unitIds
-      .map((unitId) => worldState.units.find((entry) => entry.id === unitId && entry.owner === "player"))
+      .map((unitId) => worldState.units.find((entry) => entry.id === unitId && entry.owner === playerColor))
       .filter(Boolean);
 
     if (units.length === 0) {
@@ -272,12 +306,14 @@ io.on("connection", (socket) => {
   });
 
   socket.on("unit:stop", ({ unitIds, isQueued }) => {
+    const playerColor = playerAssignments.get(socket.id);
+    if (!playerColor) return;
     if (!Array.isArray(unitIds) || unitIds.length === 0) {
       return;
     }
 
     const units = unitIds
-      .map((unitId) => worldState.units.find((entry) => entry.id === unitId && entry.owner === "player"))
+      .map((unitId) => worldState.units.find((entry) => entry.id === unitId && entry.owner === playerColor))
       .filter(Boolean);
 
     for (const unit of units) {
@@ -288,12 +324,14 @@ io.on("connection", (socket) => {
   });
 
   socket.on("unit:holdPosition", ({ unitIds, isQueued }) => {
+    const playerColor = playerAssignments.get(socket.id);
+    if (!playerColor) return;
     if (!Array.isArray(unitIds) || unitIds.length === 0) {
       return;
     }
 
     const units = unitIds
-      .map((unitId) => worldState.units.find((entry) => entry.id === unitId && entry.owner === "player"))
+      .map((unitId) => worldState.units.find((entry) => entry.id === unitId && entry.owner === playerColor))
       .filter(Boolean);
 
     for (const unit of units) {
@@ -304,21 +342,25 @@ io.on("connection", (socket) => {
   });
 
   socket.on("player:reset", () => {
-    worldState.units = worldState.units.filter((entry) => entry.owner !== "player");
-    worldState.units.push(
-      createUnit("unit-1", 420, 420, "player", "rifleman"),
-      createUnit("unit-2", 480, 480, "player", "rifleman"),
-      createUnit("unit-3", 440, 560, "player", "rifleman"),
-      createUnit("unit-4", 1720, 1300, "player", "rifleman"),
-      createUnit("unit-5", 1820, 1380, "player", "rifleman"),
-      createUnit("unit-at-1", 450, 420, "player", "antiTank"),
-      createUnit("unit-at-2", 510, 480, "player", "antiTank"),
-      createUnit("unit-at-3", 470, 560, "player", "antiTank"),
-      createUnit("unit-at-4", 1750, 1300, "player", "antiTank"),
-      createUnit("unit-at-5", 1850, 1380, "player", "antiTank"),
-    );
+    worldState.units = [];
+    worldState.teamSelections.blue.socketId = null;
+    worldState.teamSelections.blue.isOnline = false;
+    worldState.teamSelections.red.socketId = null;
+    worldState.teamSelections.red.isOnline = false;
+    playerAssignments.clear();
 
+    io.emit("game:reset");
     io.emit("world:state", serializeWorldState(worldState));
+  });
+
+  socket.on("disconnect", () => {
+    const color = playerAssignments.get(socket.id);
+    if (color && worldState.teamSelections[color]) {
+      worldState.teamSelections[color].isOnline = false;
+      // We don't remove the socketId yet, so the spot stays taken but "offline"
+      io.emit("world:state", serializeWorldState(worldState));
+    }
+    playerAssignments.delete(socket.id);
   });
 
   socket.on("enemy:respawn", () => {
@@ -467,6 +509,7 @@ function createUnit(id, x, y, owner = "player", variantId = "rifleman") {
 function serializeWorldState(state) {
   return {
     obstacles: state.obstacles,
+    teamSelections: state.teamSelections,
     units: state.units
       .filter((unit) => unit.health > 0)
       .map((unit) => ({
