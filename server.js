@@ -594,6 +594,8 @@ function serializeWorldState(state) {
         isFiring: !!unit.isFiring,
         isHoldingPosition: !!unit.isHoldingPosition,
         orderQueue: unit.orderQueue || [],
+        speed: unit.speed || 0,
+        damageModifiers: unit.damageModifiers || {},
       })),
   };
 }
