@@ -398,6 +398,7 @@ function createUnit(id, x, y, owner = "player", variantId = "rifleman") {
     attackCooldown: 0,
     isMoving: false,
     isFiring: false,
+    kills: 0,
   };
 }
 
@@ -410,10 +411,16 @@ function serializeWorldState(state) {
         id: unit.id,
         owner: unit.owner,
         variantId: unit.variantId,
+        unitClass: unit.unitClass,
         x: unit.x,
         y: unit.y,
         health: unit.health,
         maxHealth: unit.maxHealth,
+        attackDamage: unit.attackDamage,
+        attackRange: unit.attackRange,
+        attackCooldownTime: unit.attackCooldownTime,
+        armor: 0,
+        kills: unit.kills || 0,
         attackTargetId: unit.attackTargetId || null,
         isFiring: !!unit.isFiring,
       })),
@@ -492,6 +499,7 @@ function processAttacks(units, deltaTime) {
     hasChanged = true;
 
     if (target.health <= 0) {
+      unit.kills = (unit.kills || 0) + 1;
       for (const attacker of units) {
         if (attacker.attackTargetId === target.id) {
           attacker.attackTargetId = null;
