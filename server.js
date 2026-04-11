@@ -111,10 +111,70 @@ const worldState = {
   ],
 };
 
+function executeOrder(unit, order) {
+  if (order.type === 'move') {
+    unit.attackTargetId = null;
+    unit.isAttackMove = false;
+    unit.isHoldingPosition = false;
+    assignUnitPath(unit, order.position);
+  } else if (order.type === 'attack') {
+    unit.attackTargetId = order.targetId;
+    unit.isAttackMove = false;
+    unit.isHoldingPosition = false;
+    unit.path = [];
+    unit.targetX = unit.x;
+    unit.targetY = unit.y;
+    unit.destinationX = unit.x;
+    unit.destinationY = unit.y;
+    unit.isMoving = false;
+  } else if (order.type === 'attackMove') {
+    unit.attackTargetId = null;
+    unit.isAttackMove = true;
+    unit.isHoldingPosition = false;
+    assignUnitPath(unit, order.position);
+    unit.attackMoveDestinationX = unit.destinationX;
+    unit.attackMoveDestinationY = unit.destinationY;
+  } else if (order.type === 'stop') {
+    unit.attackTargetId = null;
+    unit.isAttackMove = false;
+    unit.isHoldingPosition = false;
+    unit.path = [];
+    unit.targetX = unit.x;
+    unit.targetY = unit.y;
+    unit.destinationX = unit.x;
+    unit.destinationY = unit.y;
+    unit.isMoving = false;
+  } else if (order.type === 'holdPosition') {
+    unit.attackTargetId = null;
+    unit.isAttackMove = false;
+    unit.isHoldingPosition = true;
+    unit.path = [];
+    unit.targetX = unit.x;
+    unit.targetY = unit.y;
+    unit.destinationX = unit.x;
+    unit.destinationY = unit.y;
+    unit.isMoving = false;
+  }
+}
+
+function processUnitOrder(unit, order, isQueued) {
+  const isIdle = !unit.isMoving && !unit.attackTargetId && !unit.isHoldingPosition;
+  if (!isQueued) {
+    unit.orderQueue = [];
+    executeOrder(unit, order);
+  } else {
+    if (isIdle && unit.orderQueue.length === 0) {
+      executeOrder(unit, order);
+    } else {
+      unit.orderQueue.push(order);
+    }
+  }
+}
+
 io.on("connection", (socket) => {
   socket.emit("world:state", serializeWorldState(worldState));
 
-  socket.on("unit:move", ({ unitIds, position }) => {
+  socket.on("unit:move", ({ unitIds, position, isQueued }) => {
     if (
       !Array.isArray(unitIds) ||
       unitIds.length === 0 ||
@@ -134,12 +194,6 @@ io.on("connection", (socket) => {
       return;
     }
 
-    for (const unit of units) {
-      unit.attackTargetId = null;
-      unit.isAttackMove = false;
-      unit.isHoldingPosition = false;
-    }
-
     const slots = buildFormation(units.length, {
       x: clamp(position.x, UNIT_RADIUS, MAP_WIDTH - UNIT_RADIUS),
       y: clamp(position.y, UNIT_RADIUS, MAP_HEIGHT - UNIT_RADIUS),
@@ -147,13 +201,13 @@ io.on("connection", (socket) => {
     const assignments = assignFormationSlots(units, slots);
 
     assignments.forEach(({ unit, slot }) => {
-      assignUnitPath(unit, slot);
+      processUnitOrder(unit, { type: 'move', position: slot }, isQueued);
     });
 
     io.emit("world:state", serializeWorldState(worldState));
   });
 
-  socket.on("unit:attack", ({ unitIds, targetId }) => {
+  socket.on("unit:attack", ({ unitIds, targetId, isQueued }) => {
     if (
       !Array.isArray(unitIds) ||
       unitIds.length === 0 ||
@@ -178,22 +232,13 @@ io.on("connection", (socket) => {
       if (!unit.canTarget.includes(target.unitClass)) {
         continue;
       }
-
-      unit.attackTargetId = targetId;
-      unit.isAttackMove = false;
-      unit.isHoldingPosition = false;
-      unit.path = [];
-      unit.targetX = unit.x;
-      unit.targetY = unit.y;
-      unit.destinationX = unit.x;
-      unit.destinationY = unit.y;
-      unit.isMoving = false;
+      processUnitOrder(unit, { type: 'attack', targetId }, isQueued);
     }
 
     io.emit("world:state", serializeWorldState(worldState));
   });
 
-  socket.on("unit:attackMove", ({ unitIds, position }) => {
+  socket.on("unit:attackMove", ({ unitIds, position, isQueued }) => {
     if (
       !Array.isArray(unitIds) ||
       unitIds.length === 0 ||
@@ -213,12 +258,6 @@ io.on("connection", (socket) => {
       return;
     }
 
-    for (const unit of units) {
-      unit.attackTargetId = null;
-      unit.isAttackMove = true;
-      unit.isHoldingPosition = false;
-    }
-
     const slots = buildFormation(units.length, {
       x: clamp(position.x, UNIT_RADIUS, MAP_WIDTH - UNIT_RADIUS),
       y: clamp(position.y, UNIT_RADIUS, MAP_HEIGHT - UNIT_RADIUS),
@@ -226,15 +265,13 @@ io.on("connection", (socket) => {
     const assignments = assignFormationSlots(units, slots);
 
     assignments.forEach(({ unit, slot }) => {
-      assignUnitPath(unit, slot);
-      unit.attackMoveDestinationX = unit.destinationX;
-      unit.attackMoveDestinationY = unit.destinationY;
+      processUnitOrder(unit, { type: 'attackMove', position: slot }, isQueued);
     });
 
     io.emit("world:state", serializeWorldState(worldState));
   });
 
-  socket.on("unit:stop", ({ unitIds }) => {
+  socket.on("unit:stop", ({ unitIds, isQueued }) => {
     if (!Array.isArray(unitIds) || unitIds.length === 0) {
       return;
     }
@@ -244,21 +281,13 @@ io.on("connection", (socket) => {
       .filter(Boolean);
 
     for (const unit of units) {
-      unit.attackTargetId = null;
-      unit.isAttackMove = false;
-      unit.isHoldingPosition = false;
-      unit.path = [];
-      unit.targetX = unit.x;
-      unit.targetY = unit.y;
-      unit.destinationX = unit.x;
-      unit.destinationY = unit.y;
-      unit.isMoving = false;
+      processUnitOrder(unit, { type: 'stop' }, isQueued);
     }
 
     io.emit("world:state", serializeWorldState(worldState));
   });
 
-  socket.on("unit:holdPosition", ({ unitIds }) => {
+  socket.on("unit:holdPosition", ({ unitIds, isQueued }) => {
     if (!Array.isArray(unitIds) || unitIds.length === 0) {
       return;
     }
@@ -268,15 +297,7 @@ io.on("connection", (socket) => {
       .filter(Boolean);
 
     for (const unit of units) {
-      unit.attackTargetId = null;
-      unit.isAttackMove = false;
-      unit.isHoldingPosition = true;
-      unit.path = [];
-      unit.targetX = unit.x;
-      unit.targetY = unit.y;
-      unit.destinationX = unit.x;
-      unit.destinationY = unit.y;
-      unit.isMoving = false;
+      processUnitOrder(unit, { type: 'holdPosition' }, isQueued);
     }
 
     io.emit("world:state", serializeWorldState(worldState));
@@ -323,6 +344,17 @@ io.on("connection", (socket) => {
 
 setInterval(() => {
   let hasMoved = false;
+
+  for (const unit of worldState.units) {
+    if (unit.health <= 0) continue;
+
+    const isIdle = !unit.isMoving && !unit.attackTargetId && !unit.isHoldingPosition;
+    if (isIdle && unit.orderQueue.length > 0) {
+      const nextOrder = unit.orderQueue.shift();
+      executeOrder(unit, nextOrder);
+      hasMoved = true;
+    }
+  }
 
   for (const unit of worldState.units) {
     if (unit.health <= 0 || unit.attackTargetId) {
@@ -427,6 +459,7 @@ function createUnit(id, x, y, owner = "player", variantId = "rifleman") {
     isMoving: false,
     isFiring: false,
     isHoldingPosition: false,
+    orderQueue: [],
     kills: 0,
   };
 }
@@ -453,6 +486,7 @@ function serializeWorldState(state) {
         attackTargetId: unit.attackTargetId || null,
         isFiring: !!unit.isFiring,
         isHoldingPosition: !!unit.isHoldingPosition,
+        orderQueue: unit.orderQueue || [],
       })),
   };
 }
