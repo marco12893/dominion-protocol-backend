@@ -26,11 +26,23 @@ const UNIT_CLASSES = {
 };
 
 const PLANE_LOITER_RADIUS = 300;
-const PLANE_TURN_SPEED = 0.8; // Radians per second - Much slower for wide turns
+const PLANE_TURN_SPEED = 1.5;
 const PLANE_BURST_COUNT = 4;
 const PLANE_BURST_COOLDOWN = 0.1;
 const PLANE_RELOAD_COOLDOWN = 6.0;
-const PLANE_SHOOTING_CONE = Math.PI / 6; // 30 degrees
+const PLANE_SHOOTING_CONE = Math.PI / 5;
+const PLANE_AIRSPACE_MARGIN = 600;
+const PLANE_AIRSPACE_TARGET_BUFFER = 120;
+const PLANE_ATTACK_RUN_EXTENSION = 220;
+const PLANE_LINEUP_DISTANCE = 180;
+const PLANE_LINEUP_LATERAL = 90;
+const PLANE_BREAKAWAY_DISTANCE = 260;
+const PLANE_BREAKAWAY_LATERAL = 140;
+const PLANE_MIN_ATTACK_SEPARATION = 110;
+const PLANE_LEAD_TIME_MIN = 0.15;
+const PLANE_LEAD_TIME_MAX = 0.85;
+const PLANE_ATTACK_MOVE_RADIUS = 280;
+const PLANE_ATTACK_MOVE_LEASH = 520;
 
 const UNIT_VARIANTS = {
   rifleman: {
@@ -219,11 +231,13 @@ function executeOrder(unit, order) {
     unit.attackTargetId = null;
     unit.isAttackMove = false;
     unit.isHoldingPosition = false;
+    unit.loiterCenter = null;
     assignUnitPath(unit, order.position);
   } else if (order.type === 'attack') {
     unit.attackTargetId = order.targetId;
     unit.isAttackMove = false;
     unit.isHoldingPosition = false;
+    unit.loiterCenter = null;
     unit.path = [];
     unit.targetX = unit.x;
     unit.targetY = unit.y;
@@ -237,10 +251,12 @@ function executeOrder(unit, order) {
     assignUnitPath(unit, order.position);
     unit.attackMoveDestinationX = unit.destinationX;
     unit.attackMoveDestinationY = unit.destinationY;
+    unit.loiterCenter = { x: unit.destinationX, y: unit.destinationY };
   } else if (order.type === 'stop') {
     unit.attackTargetId = null;
     unit.isAttackMove = false;
     unit.isHoldingPosition = false;
+    unit.loiterCenter = null;
     unit.path = [];
     unit.targetX = unit.x;
     unit.targetY = unit.y;
@@ -251,6 +267,7 @@ function executeOrder(unit, order) {
     unit.attackTargetId = null;
     unit.isAttackMove = false;
     unit.isHoldingPosition = true;
+    unit.loiterCenter = null;
     unit.path = [];
     unit.targetX = unit.x;
     unit.targetY = unit.y;
@@ -767,6 +784,25 @@ function processAttacks(units, deltaTime) {
 
     const distance = getDistanceBetweenPoints(unit.x, unit.y, target.x, target.y);
 
+    if (unit.isPlane) {
+      if (shouldPlaneDisengageFromAttackMove(unit, target)) {
+        unit.attackTargetId = null;
+        hasChanged = true;
+        continue;
+      }
+
+      if (unit.isHoldingPosition && distance > unit.attackRange) {
+        unit.attackTargetId = null;
+        hasChanged = true;
+        continue;
+      }
+
+      if (processPlaneAttack(unit, target, deltaTime)) {
+        hasChanged = true;
+      }
+      continue;
+    }
+
     if (distance > unit.attackRange) {
       if (unit.isHoldingPosition) {
         unit.attackTargetId = null;
@@ -805,13 +841,6 @@ function processAttacks(units, deltaTime) {
     unit.destinationY = unit.y;
     unit.isFiring = true;
     hasChanged = true;
-
-    if (unit.isPlane) {
-      if (processPlaneAttack(unit, target, deltaTime)) {
-        hasChanged = true;
-      }
-      continue;
-    }
 
     if (unit.attackCooldown > 0) {
       unit.attackCooldown -= deltaTime;
@@ -882,34 +911,40 @@ function processAttacks(units, deltaTime) {
 }
 
 function processPlaneAttack(unit, target, deltaTime) {
-  // Shooting cone check
-  const dx = target.x - unit.x;
-  const dy = target.y - unit.y;
+  let hasChanged = false;
+  unit.isFiring = false;
+
+  if (unit.attackCooldown > 0) {
+    unit.attackCooldown = Math.max(0, unit.attackCooldown - deltaTime);
+    hasChanged = true;
+  }
+
+  if (unit.burstCooldown > 0) {
+    unit.burstCooldown = Math.max(0, unit.burstCooldown - deltaTime);
+    hasChanged = true;
+  }
+
+  const distance = getDistanceBetweenPoints(unit.x, unit.y, target.x, target.y);
+  if (distance > unit.attackRange) {
+    return hasChanged;
+  }
+
+  const predictedTarget = getPlanePredictedTargetPosition(unit, target);
+  const dx = predictedTarget.x - unit.x;
+  const dy = predictedTarget.y - unit.y;
   const targetAngle = Math.atan2(dy, dx);
-  
-  let angleDiff = targetAngle - unit.angle;
-  while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
-  while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+  const angleDiff = getAngleDelta(unit.angle ?? 0, targetAngle);
 
   if (Math.abs(angleDiff) > PLANE_SHOOTING_CONE) {
-    unit.isFiring = false; // Cannot fire if not facing target
-    return false;
+    return hasChanged;
   }
 
-  // Reload/Cooldown check
-  if (unit.attackCooldown > 0) {
-    unit.attackCooldown -= deltaTime;
-    unit.isFiring = false;
+  if (unit.attackCooldown > 0 || unit.burstCooldown > 0) {
+    unit.isFiring = unit.attackCooldown <= 0;
     return true;
   }
 
-  // Burst logic
-  if (unit.burstCooldown > 0) {
-    unit.burstCooldown -= deltaTime;
-    return true;
-  }
-
-  // Fire a shot
+  unit.isFiring = true;
   const initialDamage = unit.attackDamage * (unit.damageModifiers[target.unitClass] ?? 1);
   const finalDamage = Math.max(1, initialDamage - (target.defense || 0));
 
@@ -939,6 +974,17 @@ function processPlaneAttack(unit, target, deltaTime) {
 
 
 function assignUnitPath(unit, desiredDestination) {
+  if (unit.isPlane) {
+    const destinationPoint = clampPointToMap(desiredDestination);
+    unit.path = [];
+    unit.targetX = destinationPoint.x;
+    unit.targetY = destinationPoint.y;
+    unit.destinationX = destinationPoint.x;
+    unit.destinationY = destinationPoint.y;
+    unit.isMoving = true;
+    return;
+  }
+
   if (unit.isHelicopter) {
     unit.path = [];
     unit.targetX = desiredDestination.x;
@@ -1067,24 +1113,35 @@ function advanceToNextWaypoint(unit) {
 
 function advancePlane(unit, deltaTime) {
   // Planes never stop. If they have no target or destination, they loiter.
-  if (!unit.isMoving && !unit.attackTargetId) {
+  const attackTarget = unit.attackTargetId
+    ? worldState.units.find((entry) => entry.id === unit.attackTargetId && entry.health > 0)
+    : null;
+  const attackMoveCenter = getPlaneAttackMoveCenter(unit);
+
+  if (attackTarget) {
+    unit.loiterCenter = null;
+    const combatDestination = getPlaneCombatDestination(unit, attackTarget);
+    unit.targetX = combatDestination.x;
+    unit.targetY = combatDestination.y;
+  } else if (unit.isAttackMove && attackMoveCenter) {
+    unit.loiterCenter = attackMoveCenter;
+    const distanceToCenter = getDistanceBetweenPoints(unit.x, unit.y, attackMoveCenter.x, attackMoveCenter.y);
+
+    if (distanceToCenter > PLANE_ATTACK_MOVE_RADIUS * 0.9) {
+      unit.targetX = attackMoveCenter.x;
+      unit.targetY = attackMoveCenter.y;
+    } else {
+      const patrolTarget = getPlaneLoiterDestination(unit, attackMoveCenter, PLANE_ATTACK_MOVE_RADIUS);
+      unit.targetX = patrolTarget.x;
+      unit.targetY = patrolTarget.y;
+    }
+  } else if (!unit.isMoving && !unit.attackTargetId) {
     if (!unit.loiterCenter) {
       unit.loiterCenter = { x: unit.x, y: unit.y };
     }
-    
-    // Loiter pathing: target a point on the circumference of a circle
-    const toCenter = Math.atan2(unit.y - unit.loiterCenter.y, unit.x - unit.loiterCenter.x);
-    const targetAngle = toCenter + Math.PI / 2; // Tangent to circle
-    const tx = unit.loiterCenter.x + Math.cos(toCenter) * PLANE_LOITER_RADIUS;
-    const ty = unit.loiterCenter.y + Math.sin(toCenter) * PLANE_LOITER_RADIUS;
-    
-    // We basically want to fly tangent to the circle at the ideal distance
-    unit.targetX = tx + Math.cos(targetAngle) * 100;
-    unit.targetY = ty + Math.sin(targetAngle) * 100;
-  } else if (unit.attackTargetId) {
-    // Attack pathing - target the unit directly
-    unit.loiterCenter = null;
-    syncUnitTarget(unit);
+    const loiterTarget = getPlaneLoiterDestination(unit, unit.loiterCenter, PLANE_LOITER_RADIUS);
+    unit.targetX = loiterTarget.x;
+    unit.targetY = loiterTarget.y;
   } else if (unit.isMoving) {
     // Air units fly straight to destination, bypass pathfinder
     unit.loiterCenter = null;
@@ -1097,14 +1154,11 @@ function advancePlane(unit, deltaTime) {
   const targetAngle = Math.atan2(dy, dx);
   
   // Graduate turn
-  let angleDiff = targetAngle - unit.angle;
-  while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
-  while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-  
   if (unit.angle === undefined || isNaN(unit.angle)) {
     unit.angle = targetAngle;
   }
 
+  const angleDiff = getAngleDelta(unit.angle, targetAngle);
   const turnStep = PLANE_TURN_SPEED * deltaTime;
   if (Math.abs(angleDiff) < turnStep) {
     unit.angle = targetAngle;
@@ -1118,18 +1172,16 @@ function advancePlane(unit, deltaTime) {
   unit.y += Math.sin(unit.angle) * dist;
 
   // Boundary check - Planes can go off-map to complete turns
-  const margin = 600;
-  unit.x = clamp(unit.x, -margin, MAP_WIDTH + margin);
-  unit.y = clamp(unit.y, -margin, MAP_HEIGHT + margin);
+  unit.x = clamp(unit.x, -PLANE_AIRSPACE_MARGIN, MAP_WIDTH + PLANE_AIRSPACE_MARGIN);
+  unit.y = clamp(unit.y, -PLANE_AIRSPACE_MARGIN, MAP_HEIGHT + PLANE_AIRSPACE_MARGIN);
 
   // Waypoint progression
   const distToTarget = Math.hypot(unit.targetX - unit.x, unit.targetY - unit.y);
-  if (distToTarget < 20 && unit.isMoving) {
-    advanceToNextWaypoint(unit);
-    if (!unit.isMoving) {
-      // Reached destination, start loitering here
-      unit.loiterCenter = { x: unit.x, y: unit.y };
-    }
+  if (distToTarget < 20 && unit.isMoving && !unit.isAttackMove && !attackTarget) {
+    unit.isMoving = false;
+    unit.destinationX = unit.x;
+    unit.destinationY = unit.y;
+    unit.loiterCenter = { x: unit.x, y: unit.y };
   }
 
   return true;
@@ -1224,18 +1276,19 @@ function resolveUnitCollisions(units) {
         const secondSeparationX = normalX * overlap * secondShare;
         const secondSeparationY = normalY * overlap * secondShare;
 
-        unit.x = clamp(unit.x - firstSeparationX, UNIT_RADIUS, MAP_WIDTH - UNIT_RADIUS);
-        unit.y = clamp(unit.y - firstSeparationY, UNIT_RADIUS, MAP_HEIGHT - UNIT_RADIUS);
-        otherUnit.x = clamp(
-          otherUnit.x + secondSeparationX,
-          UNIT_RADIUS,
-          MAP_WIDTH - UNIT_RADIUS,
-        );
-        otherUnit.y = clamp(
-          otherUnit.y + secondSeparationY,
-          UNIT_RADIUS,
-          MAP_HEIGHT - UNIT_RADIUS,
-        );
+        const unitResolvedPosition = clampUnitPosition(unit, {
+          x: unit.x - firstSeparationX,
+          y: unit.y - firstSeparationY,
+        });
+        const otherResolvedPosition = clampUnitPosition(otherUnit, {
+          x: otherUnit.x + secondSeparationX,
+          y: otherUnit.y + secondSeparationY,
+        });
+
+        unit.x = unitResolvedPosition.x;
+        unit.y = unitResolvedPosition.y;
+        otherUnit.x = otherResolvedPosition.x;
+        otherUnit.y = otherResolvedPosition.y;
 
         passAdjusted = true;
       }
@@ -1255,6 +1308,14 @@ function detectAndResolveDeadlocks(units) {
   let hasRepathed = false;
 
   for (const unit of units) {
+    if (unit.isPlane) {
+      unit.stuckTicks = 0;
+      unit.repathCooldownTicks = 0;
+      unit.previousX = unit.x;
+      unit.previousY = unit.y;
+      continue;
+    }
+
     const previousRemainingTargetDistance = getDistanceBetweenPoints(
       unit.previousX,
       unit.previousY,
@@ -1582,6 +1643,161 @@ function negateVector(vector) {
     x: -vector.x,
     y: -vector.y,
   };
+}
+
+function getAngleDelta(fromAngle, toAngle) {
+  let angleDiff = toAngle - fromAngle;
+  while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+  while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+  return angleDiff;
+}
+
+function getUnitVelocity(unit) {
+  return {
+    x: (unit.x - (unit.previousX ?? unit.x)) * TICK_RATE,
+    y: (unit.y - (unit.previousY ?? unit.y)) * TICK_RATE,
+  };
+}
+
+function clampPlanePoint(point) {
+  return {
+    x: clamp(
+      point.x,
+      -PLANE_AIRSPACE_MARGIN + PLANE_AIRSPACE_TARGET_BUFFER,
+      MAP_WIDTH + PLANE_AIRSPACE_MARGIN - PLANE_AIRSPACE_TARGET_BUFFER,
+    ),
+    y: clamp(
+      point.y,
+      -PLANE_AIRSPACE_MARGIN + PLANE_AIRSPACE_TARGET_BUFFER,
+      MAP_HEIGHT + PLANE_AIRSPACE_MARGIN - PLANE_AIRSPACE_TARGET_BUFFER,
+    ),
+  };
+}
+
+function clampPointToMap(point) {
+  return {
+    x: clamp(point.x, UNIT_RADIUS, MAP_WIDTH - UNIT_RADIUS),
+    y: clamp(point.y, UNIT_RADIUS, MAP_HEIGHT - UNIT_RADIUS),
+  };
+}
+
+function clampUnitPosition(unit, point) {
+  if (unit.isPlane) {
+    return {
+      x: clamp(point.x, -PLANE_AIRSPACE_MARGIN, MAP_WIDTH + PLANE_AIRSPACE_MARGIN),
+      y: clamp(point.y, -PLANE_AIRSPACE_MARGIN, MAP_HEIGHT + PLANE_AIRSPACE_MARGIN),
+    };
+  }
+
+  return {
+    x: clamp(point.x, UNIT_RADIUS, MAP_WIDTH - UNIT_RADIUS),
+    y: clamp(point.y, UNIT_RADIUS, MAP_HEIGHT - UNIT_RADIUS),
+  };
+}
+
+function getPlanePredictedTargetPosition(unit, target) {
+  const targetVelocity = getUnitVelocity(target);
+  const targetSpeed = Math.hypot(targetVelocity.x, targetVelocity.y);
+  const distance = getDistanceBetweenPoints(unit.x, unit.y, target.x, target.y);
+  const closingSpeed = Math.max(120, unit.speed + targetSpeed * 0.75);
+  const leadTime = clamp(
+    distance / closingSpeed,
+    PLANE_LEAD_TIME_MIN,
+    PLANE_LEAD_TIME_MAX,
+  );
+
+  return clampPlanePoint({
+    x: target.x + targetVelocity.x * leadTime,
+    y: target.y + targetVelocity.y * leadTime,
+  });
+}
+
+// Air combat uses attack runs and short breakaways so fighters do not collapse into tight circles.
+function getPlaneCombatDestination(unit, target) {
+  const predictedTarget = getPlanePredictedTargetPosition(unit, target);
+  const planeForward = normalizeVector(Math.cos(unit.angle ?? 0), Math.sin(unit.angle ?? 0)) ?? { x: 1, y: 0 };
+  const toPredicted =
+    normalizeVector(predictedTarget.x - unit.x, predictedTarget.y - unit.y) ??
+    planeForward;
+  const targetVelocity = getUnitVelocity(target);
+  const targetMotion = normalizeVector(targetVelocity.x, targetVelocity.y);
+  const pursuitAxis = targetMotion ?? toPredicted;
+  const turnCross = planeForward.x * toPredicted.y - planeForward.y * toPredicted.x;
+  const lateralSign = Math.abs(turnCross) < 0.001 ? 1 : Math.sign(turnCross);
+  const lateral = { x: -pursuitAxis.y * lateralSign, y: pursuitAxis.x * lateralSign };
+  const distance = getDistanceBetweenPoints(unit.x, unit.y, target.x, target.y);
+  const aspect = dotProduct(planeForward, toPredicted);
+
+  if (distance < PLANE_MIN_ATTACK_SEPARATION || aspect < -0.15) {
+    return clampPlanePoint({
+      x: unit.x + planeForward.x * PLANE_BREAKAWAY_DISTANCE + lateral.x * PLANE_BREAKAWAY_LATERAL,
+      y: unit.y + planeForward.y * PLANE_BREAKAWAY_DISTANCE + lateral.y * PLANE_BREAKAWAY_LATERAL,
+    });
+  }
+
+  if (distance <= unit.attackRange * 1.05 && aspect > 0.55) {
+    return clampPlanePoint({
+      x: predictedTarget.x + toPredicted.x * PLANE_ATTACK_RUN_EXTENSION,
+      y: predictedTarget.y + toPredicted.y * PLANE_ATTACK_RUN_EXTENSION,
+    });
+  }
+
+  const trailDirection = targetMotion ? negateVector(targetMotion) : negateVector(toPredicted);
+  if (distance <= unit.attackRange * 1.6) {
+    return clampPlanePoint({
+      x: predictedTarget.x + trailDirection.x * PLANE_LINEUP_DISTANCE + lateral.x * PLANE_LINEUP_LATERAL,
+      y: predictedTarget.y + trailDirection.y * PLANE_LINEUP_DISTANCE + lateral.y * PLANE_LINEUP_LATERAL,
+    });
+  }
+
+  return predictedTarget;
+}
+
+function getPlaneAttackMoveCenter(unit) {
+  if (
+    !unit.isAttackMove ||
+    typeof unit.attackMoveDestinationX !== "number" ||
+    typeof unit.attackMoveDestinationY !== "number"
+  ) {
+    return null;
+  }
+
+  return {
+    x: unit.attackMoveDestinationX,
+    y: unit.attackMoveDestinationY,
+  };
+}
+
+function shouldPlaneDisengageFromAttackMove(unit, target) {
+  const attackMoveCenter = getPlaneAttackMoveCenter(unit);
+  if (!attackMoveCenter) {
+    return false;
+  }
+
+  return getDistanceBetweenPoints(
+    attackMoveCenter.x,
+    attackMoveCenter.y,
+    target.x,
+    target.y,
+  ) > PLANE_ATTACK_MOVE_LEASH;
+}
+
+function getPlaneLoiterDestination(unit, center, radius) {
+  const offsetX = unit.x - center.x;
+  const offsetY = unit.y - center.y;
+  const offsetDistance = Math.hypot(offsetX, offsetY);
+  const radialAngle = offsetDistance < 1
+    ? unit.angle ?? 0
+    : Math.atan2(offsetY, offsetX);
+  const tangentAngle = radialAngle + Math.PI / 2;
+  const orbitX = center.x + Math.cos(radialAngle) * radius;
+  const orbitY = center.y + Math.sin(radialAngle) * radius;
+  const tangentLookahead = Math.max(80, radius * 0.35);
+
+  return clampPlanePoint({
+    x: orbitX + Math.cos(tangentAngle) * tangentLookahead,
+    y: orbitY + Math.sin(tangentAngle) * tangentLookahead,
+  });
 }
 
 function normalizeVector(x, y) {
