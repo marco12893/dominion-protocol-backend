@@ -15,7 +15,7 @@ const COLLISION_PASSES = 3;
 const CELL_SIZE = 24;
 let currentTick = 0;
 const PUSH_WEIGHT_IDLE = 0.35;
-const STARTING_RESOURCES = 3000;
+const STARTING_RESOURCES = 8000;
 const DEPLOYMENT_GRID_COLS = 5;
 const DEPLOYMENT_GRID_SPACING = 50;
 const UNIT_CLASSES = {
@@ -84,17 +84,22 @@ const UNIT_VARIANTS = {
     },
     canTarget: [UNIT_CLASSES.UNARMORED, UNIT_CLASSES.ARMORED]
   },
-  armoredDummy: {
+  heavyTank: {
     unitClass: UNIT_CLASSES.ARMORED,
-    maxHealth: 500,
-    attackDamage: 0,
-    attackRange: 0,
-    attackCooldown: 1.0,
-    defense: 2,
-    speed: 0,
-    cost: 1000,
-    damageModifiers: {},
-    canTarget: []
+    maxHealth: 600,
+    attackDamage: 100,
+    attackRange: 200,
+    attackCooldown: 2.5,
+    defense: 5,
+    speed: 130,
+    cost: 1600,
+    damageModifiers: {
+      [UNIT_CLASSES.UNARMORED]: 0.35,
+      [UNIT_CLASSES.ARMORED]: 1.0,
+      [UNIT_CLASSES.HELICOPTER]: 0.0,
+      [UNIT_CLASSES.PLANE]: 0.0,
+    },
+    canTarget: [UNIT_CLASSES.UNARMORED, UNIT_CLASSES.ARMORED]
   },
   antiTank: {
     unitClass: UNIT_CLASSES.UNARMORED,
@@ -146,6 +151,23 @@ const UNIT_VARIANTS = {
       [UNIT_CLASSES.PLANE]: 1.0,
     },
     canTarget: [UNIT_CLASSES.PLANE, UNIT_CLASSES.HELICOPTER]
+  },
+  attackHelicopter: {
+    unitClass: UNIT_CLASSES.HELICOPTER,
+    maxHealth: 150,
+    attackDamage: 12,
+    attackRange: 160,
+    attackCooldown: 0.25,
+    defense: 1,
+    speed: 180,
+    cost: 700,
+    damageModifiers: {
+      [UNIT_CLASSES.UNARMORED]: 1.0,
+      [UNIT_CLASSES.ARMORED]: 0.5,
+      [UNIT_CLASSES.HELICOPTER]: 0.5,
+      [UNIT_CLASSES.PLANE]: 0.0,
+    },
+    canTarget: [UNIT_CLASSES.UNARMORED, UNIT_CLASSES.ARMORED, UNIT_CLASSES.HELICOPTER]
   }
 };
 const PUSH_WEIGHT_MOVING = 1;
@@ -617,6 +639,7 @@ function createUnit(id, x, y, owner = "player", variantId = "rifleman") {
     // Plane properties
     angle: 0,
     isPlane: variantProps.unitClass === UNIT_CLASSES.PLANE,
+    isHelicopter: variantProps.unitClass === UNIT_CLASSES.HELICOPTER,
     loiterCenter: null,
     burstTicks: 0,
     burstCooldown: 0,
@@ -713,6 +736,7 @@ function serializeWorldState(state) {
         speed: unit.speed || 0,
         angle: unit.angle || 0,
         isPlane: !!unit.isPlane,
+        isHelicopter: !!unit.isHelicopter,
         damageModifiers: unit.damageModifiers || {},
       })),
   };
@@ -821,6 +845,19 @@ function processAttacks(units, deltaTime) {
           applyDamage(currentTarget, unit, finalDamage);
         }
       }, flightTime * 1000);
+    } else if (unit.isHelicopter) {
+      // Helicopter Machine Gun (Projectile-based)
+      io.emit("unit:shootProjectile", {
+        id: `bullet-heli-${unit.id}-${Date.now()}`,
+        shooterId: unit.id,
+        targetId: target.id,
+        startX: unit.x,
+        startY: unit.y,
+        damage: finalDamage,
+        speed: 800, // Faster bullets like fighters
+        variantId: "fighter_bullet"
+      });
+      applyDamage(target, unit, finalDamage);
     } else {
       // Normal instant damage
       applyDamage(target, unit, finalDamage);
@@ -902,6 +939,16 @@ function processPlaneAttack(unit, target, deltaTime) {
 
 
 function assignUnitPath(unit, desiredDestination) {
+  if (unit.isHelicopter) {
+    unit.path = [];
+    unit.targetX = desiredDestination.x;
+    unit.targetY = desiredDestination.y;
+    unit.destinationX = desiredDestination.x;
+    unit.destinationY = desiredDestination.y;
+    unit.isMoving = true;
+    return;
+  }
+
   const startCell = pointToCell(unit.x, unit.y);
   const goalCell = findNearestWalkableCell(desiredDestination);
 
@@ -1092,7 +1139,7 @@ function resolveObstacleCollisions(units) {
   let hasAdjusted = false;
 
   for (const unit of units) {
-    if (unit.isPlane) continue;
+    if (unit.isPlane || unit.isHelicopter) continue;
     for (const obstacle of OBSTACLES) {
       const expanded = expandObstacle(obstacle, UNIT_RADIUS);
 
@@ -1143,6 +1190,14 @@ function resolveUnitCollisions(units) {
       for (let compareIndex = index + 1; compareIndex < units.length; compareIndex += 1) {
         const unit = units[index];
         const otherUnit = units[compareIndex];
+
+        // Air units (Planes/Helicopters) do not collide with ground units
+        const unitIsAir = unit.isPlane || unit.isHelicopter;
+        const otherIsAir = otherUnit.isPlane || otherUnit.isHelicopter;
+        if (unitIsAir !== otherIsAir) {
+          continue;
+        }
+
         const dx = otherUnit.x - unit.x;
         const dy = otherUnit.y - unit.y;
         const distance = Math.hypot(dx, dy);
