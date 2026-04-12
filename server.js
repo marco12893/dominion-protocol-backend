@@ -24,6 +24,13 @@ const UNIT_CLASSES = {
   PLANE: "plane"
 };
 
+const PLANE_LOITER_RADIUS = 300;
+const PLANE_TURN_SPEED = 0.8; // Radians per second - Much slower for wide turns
+const PLANE_BURST_COUNT = 4;
+const PLANE_BURST_COOLDOWN = 0.1;
+const PLANE_RELOAD_COOLDOWN = 6.0;
+const PLANE_SHOOTING_CONE = Math.PI / 6; // 30 degrees
+
 const UNIT_VARIANTS = {
   rifleman: {
     unitClass: UNIT_CLASSES.UNARMORED,
@@ -104,6 +111,23 @@ const UNIT_VARIANTS = {
       [UNIT_CLASSES.PLANE]: 0.0,
     },
     canTarget: [UNIT_CLASSES.UNARMORED, UNIT_CLASSES.ARMORED, UNIT_CLASSES.HELICOPTER]
+  },
+  fighter: {
+    unitClass: UNIT_CLASSES.PLANE,
+    maxHealth: 40,
+    attackDamage: 12,
+    attackRange: 280,
+    attackCooldown: PLANE_RELOAD_COOLDOWN,
+    defense: 0,
+    speed: 380,
+    cost: 1000,
+    damageModifiers: {
+      [UNIT_CLASSES.UNARMORED]: 0.7,
+      [UNIT_CLASSES.ARMORED]: 0.3,
+      [UNIT_CLASSES.HELICOPTER]: 1.0,
+      [UNIT_CLASSES.PLANE]: 1.0,
+    },
+    canTarget: [UNIT_CLASSES.UNARMORED, UNIT_CLASSES.ARMORED, UNIT_CLASSES.HELICOPTER, UNIT_CLASSES.PLANE]
   }
 };
 const PUSH_WEIGHT_MOVING = 1;
@@ -477,9 +501,11 @@ setInterval(() => {
       remainingDistance > UNIT_RADIUS &&
       (unit.path.length > 0 || remainingDistance > 1);
 
-    if (!hasActiveOrder || unit.isAttackMove) {
+    const canAutoEngage = !hasActiveOrder || unit.isAttackMove || (unit.isPlane && !unit.attackTargetId);
+
+    if (canAutoEngage) {
       let nearestTarget = null;
-      let minDistance = unit.attackRange;
+      let minDistance = unit.isPlane ? unit.attackRange * 1.5 : unit.attackRange; // Planes have slightly larger aggro
 
       for (const otherUnit of worldState.units) {
         if (otherUnit.id === unit.id || otherUnit.health <= 0 || otherUnit.owner === unit.owner) {
@@ -569,6 +595,12 @@ function createUnit(id, x, y, owner = "player", variantId = "rifleman") {
     speed: variantProps.speed || UNIT_SPEED,
     orderQueue: [],
     kills: 0,
+    // Plane properties
+    angle: 0,
+    isPlane: variantProps.unitClass === UNIT_CLASSES.PLANE,
+    loiterCenter: null,
+    burstTicks: 0,
+    burstCooldown: 0,
   };
 }
 
@@ -597,6 +629,8 @@ function serializeWorldState(state) {
         isHoldingPosition: !!unit.isHoldingPosition,
         orderQueue: unit.orderQueue || [],
         speed: unit.speed || 0,
+        angle: unit.angle || 0,
+        isPlane: !!unit.isPlane,
         damageModifiers: unit.damageModifiers || {},
       })),
   };
@@ -658,6 +692,13 @@ function processAttacks(units, deltaTime) {
     unit.destinationY = unit.y;
     unit.isFiring = true;
     hasChanged = true;
+
+    if (unit.isPlane) {
+      if (processPlaneAttack(unit, target, deltaTime)) {
+        hasChanged = true;
+      }
+      continue;
+    }
 
     if (unit.attackCooldown > 0) {
       unit.attackCooldown -= deltaTime;
@@ -749,6 +790,79 @@ function processAttacks(units, deltaTime) {
   return hasChanged;
 }
 
+function processPlaneAttack(unit, target, deltaTime) {
+  // Shooting cone check
+  const dx = target.x - unit.x;
+  const dy = target.y - unit.y;
+  const targetAngle = Math.atan2(dy, dx);
+  
+  let angleDiff = targetAngle - unit.angle;
+  while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+  while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+
+  if (Math.abs(angleDiff) > PLANE_SHOOTING_CONE) {
+    unit.isFiring = false; // Cannot fire if not facing target
+    return false;
+  }
+
+  // Reload/Cooldown check
+  if (unit.attackCooldown > 0) {
+    unit.attackCooldown -= deltaTime;
+    unit.isFiring = false;
+    return true;
+  }
+
+  // Burst logic
+  if (unit.burstCooldown > 0) {
+    unit.burstCooldown -= deltaTime;
+    return true;
+  }
+
+  // Fire a shot
+  const initialDamage = unit.attackDamage * (unit.damageModifiers[target.unitClass] ?? 1);
+  const finalDamage = Math.max(1, initialDamage - (target.defense || 0));
+
+  io.emit("unit:shootProjectile", {
+    id: `bullet-${unit.id}-${Date.now()}-${unit.burstTicks}`,
+    shooterId: unit.id,
+    targetId: target.id,
+    startX: unit.x,
+    startY: unit.y,
+    damage: finalDamage,
+    speed: 800, // Faster bullets
+    variantId: "fighter_bullet"
+  });
+
+  // Apply damage (or handle as projectile impact later, but current engine handles it via timeout or instant)
+  // Current engine uses flightTime timeout for antiTank, let's do similar or instant for bullets
+  target.health = Math.max(0, target.health - finalDamage);
+  if (target.health <= 0) {
+    unit.kills = (unit.kills || 0) + 1;
+    handleTargetDeath(target);
+  }
+
+  unit.burstTicks++;
+  if (unit.burstTicks >= PLANE_BURST_COUNT) {
+    unit.burstTicks = 0;
+    unit.attackCooldown = unit.attackCooldownTime; // Full reload
+  } else {
+    unit.burstCooldown = PLANE_BURST_COOLDOWN;
+  }
+
+  return true;
+}
+
+function handleTargetDeath(target) {
+  for (const attacker of worldState.units) {
+    if (attacker.attackTargetId === target.id) {
+      attacker.attackTargetId = null;
+      if (attacker.isAttackMove) {
+        assignUnitPath(attacker, { x: attacker.attackMoveDestinationX, y: attacker.attackMoveDestinationY });
+      }
+    }
+  }
+}
+
 function assignUnitPath(unit, desiredDestination) {
   const startCell = pointToCell(unit.x, unit.y);
   const goalCell = findNearestWalkableCell(desiredDestination);
@@ -804,6 +918,10 @@ function clamp(value, min, max) {
 }
 
 function advanceUnit(unit, deltaTime) {
+  if (unit.isPlane) {
+    return advancePlane(unit, deltaTime);
+  }
+
   if (!unit.isMoving) {
     unit.destinationX = unit.x;
     unit.destinationY = unit.y;
@@ -862,10 +980,81 @@ function advanceToNextWaypoint(unit) {
   return true;
 }
 
+function advancePlane(unit, deltaTime) {
+  // Planes never stop. If they have no target or destination, they loiter.
+  if (!unit.isMoving && !unit.attackTargetId) {
+    if (!unit.loiterCenter) {
+      unit.loiterCenter = { x: unit.x, y: unit.y };
+    }
+    
+    // Loiter pathing: target a point on the circumference of a circle
+    const toCenter = Math.atan2(unit.y - unit.loiterCenter.y, unit.x - unit.loiterCenter.x);
+    const targetAngle = toCenter + Math.PI / 2; // Tangent to circle
+    const tx = unit.loiterCenter.x + Math.cos(toCenter) * PLANE_LOITER_RADIUS;
+    const ty = unit.loiterCenter.y + Math.sin(toCenter) * PLANE_LOITER_RADIUS;
+    
+    // We basically want to fly tangent to the circle at the ideal distance
+    unit.targetX = tx + Math.cos(targetAngle) * 100;
+    unit.targetY = ty + Math.sin(targetAngle) * 100;
+  } else if (unit.attackTargetId) {
+    // Attack pathing - target the unit directly
+    unit.loiterCenter = null;
+    syncUnitTarget(unit);
+  } else if (unit.isMoving) {
+    // Air units fly straight to destination, bypass pathfinder
+    unit.loiterCenter = null;
+    unit.targetX = unit.destinationX;
+    unit.targetY = unit.destinationY;
+  }
+
+  const dx = unit.targetX - unit.x;
+  const dy = unit.targetY - unit.y;
+  const targetAngle = Math.atan2(dy, dx);
+  
+  // Graduate turn
+  let angleDiff = targetAngle - unit.angle;
+  while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+  while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+  
+  if (unit.angle === undefined || isNaN(unit.angle)) {
+    unit.angle = targetAngle;
+  }
+
+  const turnStep = PLANE_TURN_SPEED * deltaTime;
+  if (Math.abs(angleDiff) < turnStep) {
+    unit.angle = targetAngle;
+  } else {
+    unit.angle += Math.sign(angleDiff) * turnStep;
+  }
+
+  // Move forward
+  const dist = (unit.speed || UNIT_SPEED) * deltaTime;
+  unit.x += Math.cos(unit.angle) * dist;
+  unit.y += Math.sin(unit.angle) * dist;
+
+  // Boundary check - Planes can go off-map to complete turns
+  const margin = 600;
+  unit.x = clamp(unit.x, -margin, MAP_WIDTH + margin);
+  unit.y = clamp(unit.y, -margin, MAP_HEIGHT + margin);
+
+  // Waypoint progression
+  const distToTarget = Math.hypot(unit.targetX - unit.x, unit.targetY - unit.y);
+  if (distToTarget < 20 && unit.isMoving) {
+    advanceToNextWaypoint(unit);
+    if (!unit.isMoving) {
+      // Reached destination, start loitering here
+      unit.loiterCenter = { x: unit.x, y: unit.y };
+    }
+  }
+
+  return true;
+}
+
 function resolveObstacleCollisions(units) {
   let hasAdjusted = false;
 
   for (const unit of units) {
+    if (unit.isPlane) continue;
     for (const obstacle of OBSTACLES) {
       const expanded = expandObstacle(obstacle, UNIT_RADIUS);
 
