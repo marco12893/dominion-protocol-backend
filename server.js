@@ -13,6 +13,7 @@ const FORMATION_SPACING = 28;
 const UNIT_RADIUS = 10;
 const COLLISION_PASSES = 3;
 const CELL_SIZE = 24;
+let currentTick = 0;
 const PUSH_WEIGHT_IDLE = 0.35;
 const STARTING_RESOURCES = 3000;
 const DEPLOYMENT_GRID_COLS = 5;
@@ -128,6 +129,23 @@ const UNIT_VARIANTS = {
       [UNIT_CLASSES.PLANE]: 1.0,
     },
     canTarget: [UNIT_CLASSES.UNARMORED, UNIT_CLASSES.ARMORED, UNIT_CLASSES.HELICOPTER, UNIT_CLASSES.PLANE]
+  },
+  antiAir: {
+    unitClass: UNIT_CLASSES.ARMORED,
+    maxHealth: 120,
+    attackDamage: 14,
+    attackRange: 320,
+    attackCooldown: 2.0,
+    defense: 1,
+    speed: 160,
+    cost: 600,
+    damageModifiers: {
+      [UNIT_CLASSES.UNARMORED]: 0.0,
+      [UNIT_CLASSES.ARMORED]: 0.0,
+      [UNIT_CLASSES.HELICOPTER]: 1.0,
+      [UNIT_CLASSES.PLANE]: 1.0,
+    },
+    canTarget: [UNIT_CLASSES.PLANE, UNIT_CLASSES.HELICOPTER]
   }
 };
 const PUSH_WEIGHT_MOVING = 1;
@@ -548,6 +566,7 @@ setInterval(() => {
   if (hasMoved) {
     io.emit("world:state", serializeWorldState(worldState));
   }
+  currentTick++;
 }, 1000 / TICK_RATE);
 
 httpServer.listen(PORT, () => {
@@ -601,7 +620,70 @@ function createUnit(id, x, y, owner = "player", variantId = "rifleman") {
     loiterCenter: null,
     burstTicks: 0,
     burstCooldown: 0,
+    lastRetreatTick: 0,
   };
+}
+
+function handleSkirmishRetreat(unit, attacker) {
+  if (unit.isHoldingPosition) return false;
+  
+  // Anti-Air always retreats when hit (skirmishing)
+  // Others retreat if they can't target the attacker
+  const canHitBack = unit.canTarget.includes(attacker.unitClass);
+  const shouldRetreat = unit.variantId === "antiAir" || !canHitBack;
+  
+  if (!shouldRetreat) return false;
+
+  // Internal cooldown: 2 seconds (40 ticks at 20fps)
+  if (currentTick - (unit.lastRetreatTick || 0) < 40) return false;
+
+  const dx = unit.x - attacker.x;
+  const dy = unit.y - attacker.y;
+  const dist = Math.hypot(dx, dy);
+  
+  if (dist < 1) return false; // Avoid div by zero
+
+  const retreatDistance = 120;
+  const targetX = clamp(unit.x + (dx / dist) * retreatDistance, UNIT_RADIUS, MAP_WIDTH - UNIT_RADIUS);
+  const targetY = clamp(unit.y + (dy / dist) * retreatDistance, UNIT_RADIUS, MAP_HEIGHT - UNIT_RADIUS);
+
+  // Clear orders and retreat
+  unit.orderQueue = [];
+  unit.attackTargetId = null;
+  assignUnitPath(unit, { x: targetX, y: targetY });
+  unit.lastRetreatTick = currentTick;
+  return true;
+}
+
+function applyDamage(target, shooter, damage) {
+  if (target.health <= 0) return false;
+  
+  target.health = Math.max(0, target.health - damage);
+  handleSkirmishRetreat(target, shooter);
+  
+  if (target.health <= 0) {
+    shooter.kills = (shooter.kills || 0) + 1;
+    handleTargetDeath(target);
+    return true;
+  }
+  
+  // Retaliation: if target is idle, retaliate against attacker
+  if (!target.attackTargetId && target.canTarget.includes(shooter.unitClass)) {
+    target.attackTargetId = shooter.id;
+  }
+  
+  return false;
+}
+
+function handleTargetDeath(target) {
+  for (const attacker of worldState.units) {
+    if (attacker.attackTargetId === target.id) {
+      attacker.attackTargetId = null;
+      if (attacker.isAttackMove) {
+        assignUnitPath(attacker, { x: attacker.attackMoveDestinationX, y: attacker.attackMoveDestinationY });
+      }
+    }
+  }
 }
 
 function serializeWorldState(state) {
@@ -668,6 +750,13 @@ function processAttacks(units, deltaTime) {
         continue;
       }
 
+      if (unit.variantId === "antiAir") {
+        // Anti-Air does not chase planes/helicopters
+        unit.attackTargetId = null;
+        hasChanged = true;
+        continue;
+      }
+
       const dx = target.x - unit.x;
       const dy = target.y - unit.y;
       const stopDistance = unit.attackRange * 0.8;
@@ -708,49 +797,33 @@ function processAttacks(units, deltaTime) {
     const initialDamage = unit.attackDamage * (unit.damageModifiers[target.unitClass] ?? 1);
     const finalDamage = Math.max(1, initialDamage - (target.defense || 0));
 
-    if (unit.variantId === "antiTank") {
+    if (unit.variantId === "antiTank" || unit.variantId === "antiAir") {
       // Missile logic
+      const isAA = unit.variantId === "antiAir";
       const distance = getDistanceBetweenPoints(unit.x, unit.y, target.x, target.y);
-      const flightTime = distance / 450; // 450px/s speed
+      const speed = isAA ? 550 : 450;
+      const flightTime = distance / speed;
 
       io.emit("unit:shootProjectile", {
-        id: `projectile-${unit.id}-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        id: `msl-${unit.id}-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
         shooterId: unit.id,
         targetId: target.id,
         startX: unit.x,
         startY: unit.y,
         damage: finalDamage,
-        speed: 450
+        speed: speed,
+        variantId: isAA ? "aa_missile" : "antiTank_missile"
       });
 
       setTimeout(() => {
-        // Find target again as it might have moved or died
         const currentTarget = worldState.units.find(u => u.id === target.id);
         if (currentTarget && currentTarget.health > 0) {
-          currentTarget.health = Math.max(0, currentTarget.health - finalDamage);
-          if (currentTarget.health <= 0) {
-            unit.kills = (unit.kills || 0) + 1;
-            // Clean up other units' targets
-            for (const attacker of worldState.units) {
-              if (attacker.attackTargetId === currentTarget.id) {
-                attacker.attackTargetId = null;
-                if (attacker.isAttackMove) {
-                  assignUnitPath(attacker, { x: attacker.attackMoveDestinationX, y: attacker.attackMoveDestinationY });
-                }
-              }
-            }
-          }
-          // Retaliation logic
-          if (currentTarget.health > 0 && !currentTarget.attackTargetId) {
-            if (currentTarget.canTarget.includes(unit.unitClass)) {
-              currentTarget.attackTargetId = unit.id;
-            }
-          }
+          applyDamage(currentTarget, unit, finalDamage);
         }
       }, flightTime * 1000);
     } else {
       // Normal instant damage
-      target.health = Math.max(0, target.health - finalDamage);
+      applyDamage(target, unit, finalDamage);
 
       // Emit attack event for hitscan visuals
       io.emit("unit:attack", {
@@ -761,25 +834,6 @@ function processAttacks(units, deltaTime) {
         targetPos: { x: target.x, y: target.y },
         variantId: unit.variantId
       });
-      
-      // Counter-attack logic: if target is idle, retaliate against attacker
-      if (target.health > 0 && !target.attackTargetId) {
-        if (target.canTarget.includes(unit.unitClass)) {
-          target.attackTargetId = unit.id;
-        }
-      }
-
-      if (target.health <= 0) {
-        unit.kills = (unit.kills || 0) + 1;
-        for (const attacker of worldState.units) {
-          if (attacker.attackTargetId === target.id) {
-            attacker.attackTargetId = null;
-            if (attacker.isAttackMove) {
-              assignUnitPath(attacker, { x: attacker.attackMoveDestinationX, y: attacker.attackMoveDestinationY });
-            }
-          }
-        }
-      }
     }
 
     unit.attackCooldown = unit.attackCooldownTime;
@@ -833,13 +887,7 @@ function processPlaneAttack(unit, target, deltaTime) {
     variantId: "fighter_bullet"
   });
 
-  // Apply damage (or handle as projectile impact later, but current engine handles it via timeout or instant)
-  // Current engine uses flightTime timeout for antiTank, let's do similar or instant for bullets
-  target.health = Math.max(0, target.health - finalDamage);
-  if (target.health <= 0) {
-    unit.kills = (unit.kills || 0) + 1;
-    handleTargetDeath(target);
-  }
+  applyDamage(target, unit, finalDamage);
 
   unit.burstTicks++;
   if (unit.burstTicks >= PLANE_BURST_COUNT) {
@@ -852,16 +900,6 @@ function processPlaneAttack(unit, target, deltaTime) {
   return true;
 }
 
-function handleTargetDeath(target) {
-  for (const attacker of worldState.units) {
-    if (attacker.attackTargetId === target.id) {
-      attacker.attackTargetId = null;
-      if (attacker.isAttackMove) {
-        assignUnitPath(attacker, { x: attacker.attackMoveDestinationX, y: attacker.attackMoveDestinationY });
-      }
-    }
-  }
-}
 
 function assignUnitPath(unit, desiredDestination) {
   const startCell = pointToCell(unit.x, unit.y);
