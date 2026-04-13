@@ -83,7 +83,23 @@ export function getPlanePredictedTargetPosition(unit, target) {
   });
 }
 
+export function getPlaneEgressDestination(unit, referencePoint, distance, lateralDistance) {
+  const planeForward =
+    normalizeVector(Math.cos(unit.angle ?? 0), Math.sin(unit.angle ?? 0)) ?? { x: 1, y: 0 };
+  const toReference =
+    normalizeVector(referencePoint.x - unit.x, referencePoint.y - unit.y) ?? planeForward;
+  const turnCross = planeForward.x * toReference.y - planeForward.y * toReference.x;
+  const lateralSign = Math.abs(turnCross) < 0.001 ? 1 : Math.sign(turnCross);
+  const lateral = { x: -planeForward.y * lateralSign, y: planeForward.x * lateralSign };
+
+  return clampPlanePoint({
+    x: unit.x + planeForward.x * distance + lateral.x * lateralDistance,
+    y: unit.y + planeForward.y * distance + lateral.y * lateralDistance,
+  });
+}
+
 export function getPlaneCombatDestination(unit, target) {
+  const engagementRange = unit.engagementRange ?? unit.attackRange;
   const predictedTarget = getPlanePredictedTargetPosition(unit, target);
   const planeForward = normalizeVector(Math.cos(unit.angle ?? 0), Math.sin(unit.angle ?? 0)) ?? { x: 1, y: 0 };
   const toPredicted =
@@ -105,7 +121,7 @@ export function getPlaneCombatDestination(unit, target) {
     });
   }
 
-  if (distance <= unit.attackRange * 1.05 && aspect > 0.55) {
+  if (distance <= engagementRange * 1.05 && aspect > 0.55) {
     return clampPlanePoint({
       x: predictedTarget.x + toPredicted.x * PLANE_ATTACK_RUN_EXTENSION,
       y: predictedTarget.y + toPredicted.y * PLANE_ATTACK_RUN_EXTENSION,
@@ -113,7 +129,7 @@ export function getPlaneCombatDestination(unit, target) {
   }
 
   const trailDirection = targetMotion ? negateVector(targetMotion) : negateVector(toPredicted);
-  if (distance <= unit.attackRange * 1.6) {
+  if (distance <= engagementRange * 1.6) {
     return clampPlanePoint({
       x: predictedTarget.x + trailDirection.x * PLANE_LINEUP_DISTANCE + lateral.x * PLANE_LINEUP_LATERAL,
       y: predictedTarget.y + trailDirection.y * PLANE_LINEUP_DISTANCE + lateral.y * PLANE_LINEUP_LATERAL,

@@ -46,7 +46,8 @@ export function createGameLoop({
 
       if (canAutoEngage) {
         let nearestTarget = null;
-        let minDistance = unit.isPlane ? unit.attackRange * 1.5 : unit.attackRange;
+        const engagementRange = unit.engagementRange ?? unit.attackRange;
+        let minDistance = unit.isPlane ? engagementRange * 1.5 : engagementRange;
 
         for (const otherUnit of worldState.units) {
           if (otherUnit.id === unit.id || otherUnit.health <= 0 || otherUnit.owner === unit.owner) {

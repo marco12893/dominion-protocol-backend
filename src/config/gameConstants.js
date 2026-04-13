@@ -43,6 +43,12 @@ export const PLANE_LEAD_TIME_MIN = 0.15;
 export const PLANE_LEAD_TIME_MAX = 0.85;
 export const PLANE_ATTACK_MOVE_RADIUS = 280;
 export const PLANE_ATTACK_MOVE_LEASH = 520;
+export const BOMBER_RELOAD_COOLDOWN = 15.0;
+export const BOMBER_DROP_RANGE = 70;
+export const BOMBER_SPLASH_RADIUS = 95;
+export const BOMBER_EGRESS_DISTANCE = 950;
+export const BOMBER_EGRESS_LATERAL = 180;
+export const BOMBER_REENGAGE_COOLDOWN = 4.5;
 
 export const OBSTACLES = [
   { id: "rock-1", x: 640, y: 510, width: 350, height: 290 },
@@ -153,6 +159,24 @@ export const UNIT_VARIANTS = {
       [UNIT_CLASSES.PLANE]: 1.0,
     },
     canTarget: [UNIT_CLASSES.UNARMORED, UNIT_CLASSES.ARMORED, UNIT_CLASSES.HELICOPTER, UNIT_CLASSES.PLANE],
+  },
+  bomber: {
+    unitClass: UNIT_CLASSES.PLANE,
+    maxHealth: 320,
+    attackDamage: 220,
+    attackRange: BOMBER_DROP_RANGE,
+    engagementRange: 280,
+    attackCooldown: BOMBER_RELOAD_COOLDOWN,
+    defense: 8,
+    speed: 300,
+    cost: 1800,
+    damageModifiers: {
+      [UNIT_CLASSES.UNARMORED]: 1.2,
+      [UNIT_CLASSES.ARMORED]: 1.0,
+      [UNIT_CLASSES.HELICOPTER]: 0.0,
+      [UNIT_CLASSES.PLANE]: 0.0,
+    },
+    canTarget: [UNIT_CLASSES.UNARMORED, UNIT_CLASSES.ARMORED],
   },
   antiAir: {
     unitClass: UNIT_CLASSES.ARMORED,

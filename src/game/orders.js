@@ -5,12 +5,18 @@ export function createOrderController({ assignUnitPath }) {
       unit.isAttackMove = false;
       unit.isHoldingPosition = false;
       unit.loiterCenter = null;
+      unit.egressPoint = null;
+      unit.egressDistance = 0;
+      unit.egressLateral = 0;
       assignUnitPath(unit, order.position);
     } else if (order.type === "attack") {
       unit.attackTargetId = order.targetId;
       unit.isAttackMove = false;
       unit.isHoldingPosition = false;
       unit.loiterCenter = null;
+      unit.egressPoint = null;
+      unit.egressDistance = 0;
+      unit.egressLateral = 0;
       unit.path = [];
       unit.targetX = unit.x;
       unit.targetY = unit.y;
@@ -21,6 +27,9 @@ export function createOrderController({ assignUnitPath }) {
       unit.attackTargetId = null;
       unit.isAttackMove = true;
       unit.isHoldingPosition = false;
+      unit.egressPoint = null;
+      unit.egressDistance = 0;
+      unit.egressLateral = 0;
       assignUnitPath(unit, order.position);
       unit.attackMoveDestinationX = unit.destinationX;
       unit.attackMoveDestinationY = unit.destinationY;
@@ -30,6 +39,9 @@ export function createOrderController({ assignUnitPath }) {
       unit.isAttackMove = false;
       unit.isHoldingPosition = false;
       unit.loiterCenter = null;
+      unit.egressPoint = null;
+      unit.egressDistance = 0;
+      unit.egressLateral = 0;
       unit.path = [];
       unit.targetX = unit.x;
       unit.targetY = unit.y;
@@ -41,6 +53,9 @@ export function createOrderController({ assignUnitPath }) {
       unit.isAttackMove = false;
       unit.isHoldingPosition = true;
       unit.loiterCenter = null;
+      unit.egressPoint = null;
+      unit.egressDistance = 0;
+      unit.egressLateral = 0;
       unit.path = [];
       unit.targetX = unit.x;
       unit.targetY = unit.y;

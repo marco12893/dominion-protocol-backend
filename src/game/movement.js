@@ -1,4 +1,5 @@
 import {
+  BOMBER_REENGAGE_COOLDOWN,
   COLLISION_PASSES,
   FORMATION_SPACING,
   MAP_HEIGHT,
@@ -38,6 +39,7 @@ import {
   clampUnitPosition,
   getPlaneAttackMoveCenter,
   getPlaneCombatDestination,
+  getPlaneEgressDestination,
   getPlaneLoiterDestination,
 } from "./planes.js";
 
@@ -356,13 +358,39 @@ export function createMovementSystem({ worldState }) {
       ? worldState.units.find((entry) => entry.id === unit.attackTargetId && entry.health > 0)
       : null;
     const attackMoveCenter = getPlaneAttackMoveCenter(unit);
+    const shouldMaintainEgress =
+      unit.variantId === "bomber" &&
+      unit.egressPoint &&
+      unit.attackCooldown > BOMBER_REENGAGE_COOLDOWN;
 
-    if (attackTarget) {
+    if (shouldMaintainEgress) {
+      unit.loiterCenter = null;
+
+      const distanceToEgress = getDistanceBetweenPoints(
+        unit.x,
+        unit.y,
+        unit.egressPoint.x,
+        unit.egressPoint.y,
+      );
+      if (distanceToEgress < 80) {
+        unit.egressPoint = getPlaneEgressDestination(
+          unit,
+          attackTarget ?? unit.egressPoint,
+          unit.egressDistance ?? 0,
+          unit.egressLateral ?? 0,
+        );
+      }
+
+      unit.targetX = unit.egressPoint.x;
+      unit.targetY = unit.egressPoint.y;
+    } else if (attackTarget) {
+      unit.egressPoint = null;
       unit.loiterCenter = null;
       const combatDestination = getPlaneCombatDestination(unit, attackTarget);
       unit.targetX = combatDestination.x;
       unit.targetY = combatDestination.y;
     } else if (unit.isAttackMove && attackMoveCenter) {
+      unit.egressPoint = null;
       unit.loiterCenter = attackMoveCenter;
       const distanceToCenter = getDistanceBetweenPoints(unit.x, unit.y, attackMoveCenter.x, attackMoveCenter.y);
 
@@ -375,6 +403,7 @@ export function createMovementSystem({ worldState }) {
         unit.targetY = patrolTarget.y;
       }
     } else if (!unit.isMoving && !unit.attackTargetId) {
+      unit.egressPoint = null;
       if (!unit.loiterCenter) {
         unit.loiterCenter = { x: unit.x, y: unit.y };
       }
@@ -382,9 +411,13 @@ export function createMovementSystem({ worldState }) {
       unit.targetX = loiterTarget.x;
       unit.targetY = loiterTarget.y;
     } else if (unit.isMoving) {
+      unit.egressPoint = null;
       unit.loiterCenter = null;
       unit.targetX = unit.destinationX;
       unit.targetY = unit.destinationY;
+    } else if (unit.egressPoint) {
+      unit.targetX = unit.egressPoint.x;
+      unit.targetY = unit.egressPoint.y;
     }
 
     const dx = unit.targetX - unit.x;

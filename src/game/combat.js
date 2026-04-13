@@ -1,4 +1,8 @@
 import {
+  BOMBER_DROP_RANGE,
+  BOMBER_EGRESS_DISTANCE,
+  BOMBER_EGRESS_LATERAL,
+  BOMBER_SPLASH_RADIUS,
   MAP_HEIGHT,
   MAP_WIDTH,
   PLANE_BURST_COOLDOWN,
@@ -8,6 +12,7 @@ import {
 } from "../config/gameConstants.js";
 import { clamp, getAngleDelta, getDistanceBetweenPoints } from "../utils/math.js";
 import {
+  getPlaneEgressDestination,
   getPlanePredictedTargetPosition,
   shouldPlaneDisengageFromAttackMove,
 } from "./planes.js";
@@ -71,7 +76,108 @@ export function createCombatSystem({ io, world, assignUnitPath }) {
     }
   }
 
+  function getFinalDamage(attacker, target, multiplier = 1) {
+    const initialDamage =
+      attacker.attackDamage * (attacker.damageModifiers[target.unitClass] ?? 1) * multiplier;
+    return Math.max(1, initialDamage - (target.defense || 0));
+  }
+
+  function processBomberAttack(unit, target, deltaTime) {
+    let hasChanged = false;
+    unit.isFiring = false;
+
+    if (unit.attackCooldown > 0) {
+      unit.attackCooldown = Math.max(0, unit.attackCooldown - deltaTime);
+      return true;
+    }
+
+    const distance = getDistanceBetweenPoints(unit.x, unit.y, target.x, target.y);
+    if (distance > BOMBER_DROP_RANGE) {
+      return hasChanged;
+    }
+
+    const predictedTarget = getPlanePredictedTargetPosition(unit, target);
+    const targetAngle = Math.atan2(predictedTarget.y - unit.y, predictedTarget.x - unit.x);
+    const angleDiff = getAngleDelta(unit.angle ?? 0, targetAngle);
+
+    if (Math.abs(angleDiff) > PLANE_SHOOTING_CONE) {
+      return hasChanged;
+    }
+
+    unit.isFiring = true;
+    const impactPoint = { x: target.x, y: target.y };
+
+    io.emit("unit:shootProjectile", {
+      id: `bomb-${unit.id}-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      shooterId: unit.id,
+      startX: unit.x,
+      startY: unit.y,
+      targetX: impactPoint.x,
+      targetY: impactPoint.y,
+      damage: unit.attackDamage,
+      speed: 520,
+      variantId: "bomber_bomb",
+      explosionRadius: BOMBER_SPLASH_RADIUS,
+    });
+
+    io.emit("unit:attack", {
+      id: `bomb-impact-${unit.id}-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      unitId: unit.id,
+      targetId: target.id,
+      shooterPos: { x: unit.x, y: unit.y },
+      targetPos: impactPoint,
+      variantId: unit.variantId,
+      splashRadius: BOMBER_SPLASH_RADIUS,
+    });
+
+    for (const splashTarget of worldState.units) {
+      if (
+        splashTarget.health <= 0 ||
+        splashTarget.owner === unit.owner ||
+        !unit.canTarget.includes(splashTarget.unitClass)
+      ) {
+        continue;
+      }
+
+      const splashDistance = getDistanceBetweenPoints(
+        impactPoint.x,
+        impactPoint.y,
+        splashTarget.x,
+        splashTarget.y,
+      );
+      if (splashDistance > BOMBER_SPLASH_RADIUS) {
+        continue;
+      }
+
+      const splashMultiplier =
+        splashTarget.id === target.id
+          ? 1
+          : Math.max(0.35, 1 - splashDistance / BOMBER_SPLASH_RADIUS);
+      const finalDamage = getFinalDamage(unit, splashTarget, splashMultiplier);
+
+      applyDamage(splashTarget, unit, finalDamage);
+    }
+
+    unit.attackCooldown = unit.attackCooldownTime;
+    unit.egressPoint = getPlaneEgressDestination(
+      unit,
+      impactPoint,
+      BOMBER_EGRESS_DISTANCE,
+      BOMBER_EGRESS_LATERAL,
+    );
+    unit.egressDistance = BOMBER_EGRESS_DISTANCE;
+    unit.egressLateral = BOMBER_EGRESS_LATERAL;
+    unit.burstTicks = 0;
+    unit.burstCooldown = 0;
+
+    return true;
+  }
+
   function processPlaneAttack(unit, target, deltaTime) {
+    if (unit.variantId === "bomber") {
+      return processBomberAttack(unit, target, deltaTime);
+    }
+
     let hasChanged = false;
     unit.isFiring = false;
 
@@ -106,8 +212,7 @@ export function createCombatSystem({ io, world, assignUnitPath }) {
     }
 
     unit.isFiring = true;
-    const initialDamage = unit.attackDamage * (unit.damageModifiers[target.unitClass] ?? 1);
-    const finalDamage = Math.max(1, initialDamage - (target.defense || 0));
+    const finalDamage = getFinalDamage(unit, target);
 
     io.emit("unit:shootProjectile", {
       id: `bullet-${unit.id}-${Date.now()}-${unit.burstTicks}`,
@@ -220,8 +325,7 @@ export function createCombatSystem({ io, world, assignUnitPath }) {
         continue;
       }
 
-      const initialDamage = unit.attackDamage * (unit.damageModifiers[target.unitClass] ?? 1);
-      const finalDamage = Math.max(1, initialDamage - (target.defense || 0));
+      const finalDamage = getFinalDamage(unit, target);
 
       if (unit.variantId === "antiTank" || unit.variantId === "antiAir") {
         const isAA = unit.variantId === "antiAir";
