@@ -7,6 +7,7 @@ import {
   UNIT_RADIUS,
   UNIT_VARIANTS,
 } from "../config/gameConstants.js";
+import { buildWorldSnapshot, emitWorldSnapshot } from "./worldBroadcast.js";
 import { clamp } from "../utils/math.js";
 
 export function registerSocketHandlers({
@@ -23,7 +24,7 @@ export function registerSocketHandlers({
   const playerAssignments = world.playerAssignments;
 
   io.on("connection", (socket) => {
-    socket.emit("world:state", serializeWorldState(worldState));
+    socket.emit("world:snapshot", buildWorldSnapshot(world, serializeWorldState));
 
     socket.on("player:join", (color) => {
       if (color !== "blue" && color !== "red") return;
@@ -35,7 +36,7 @@ export function registerSocketHandlers({
       worldState.teamSelections[color].isOnline = true;
       playerAssignments.set(socket.id, color);
 
-      io.emit("world:state", serializeWorldState(worldState));
+      emitWorldSnapshot(io, world, serializeWorldState);
     });
 
     socket.on("player:deploy", (manifest) => {
@@ -69,7 +70,7 @@ export function registerSocketHandlers({
       }
 
       worldState.teamSelections[color].hasDeployed = true;
-      io.emit("world:state", serializeWorldState(worldState));
+      emitWorldSnapshot(io, world, serializeWorldState);
     });
 
     socket.on("unit:move", ({ unitIds, position, isQueued }) => {
@@ -104,7 +105,7 @@ export function registerSocketHandlers({
         processUnitOrder(unit, { type: "move", position: slot }, isQueued);
       });
 
-      io.emit("world:state", serializeWorldState(worldState));
+      world.pendingBroadcast = true;
     });
 
     socket.on("unit:attack", ({ unitIds, targetId, isQueued }) => {
@@ -133,7 +134,7 @@ export function registerSocketHandlers({
         processUnitOrder(unit, { type: "attack", targetId }, isQueued);
       }
 
-      io.emit("world:state", serializeWorldState(worldState));
+      world.pendingBroadcast = true;
     });
 
     socket.on("unit:attackMove", ({ unitIds, position, isQueued }) => {
@@ -168,7 +169,7 @@ export function registerSocketHandlers({
         processUnitOrder(unit, { type: "attackMove", position: slot }, isQueued);
       });
 
-      io.emit("world:state", serializeWorldState(worldState));
+      world.pendingBroadcast = true;
     });
 
     socket.on("unit:stop", ({ unitIds, isQueued }) => {
@@ -186,7 +187,7 @@ export function registerSocketHandlers({
         processUnitOrder(unit, { type: "stop" }, isQueued);
       }
 
-      io.emit("world:state", serializeWorldState(worldState));
+      world.pendingBroadcast = true;
     });
 
     socket.on("unit:holdPosition", ({ unitIds, isQueued }) => {
@@ -204,7 +205,7 @@ export function registerSocketHandlers({
         processUnitOrder(unit, { type: "holdPosition" }, isQueued);
       }
 
-      io.emit("world:state", serializeWorldState(worldState));
+      world.pendingBroadcast = true;
     });
 
     socket.on("player:reset", () => {
@@ -218,14 +219,14 @@ export function registerSocketHandlers({
       playerAssignments.clear();
 
       io.emit("game:reset");
-      io.emit("world:state", serializeWorldState(worldState));
+      emitWorldSnapshot(io, world, serializeWorldState);
     });
 
     socket.on("disconnect", () => {
       const color = playerAssignments.get(socket.id);
       if (color && worldState.teamSelections[color]) {
         worldState.teamSelections[color].isOnline = false;
-        io.emit("world:state", serializeWorldState(worldState));
+        emitWorldSnapshot(io, world, serializeWorldState);
       }
       playerAssignments.delete(socket.id);
     });
@@ -251,7 +252,7 @@ export function registerSocketHandlers({
         }
       }
 
-      io.emit("world:state", serializeWorldState(worldState));
+      emitWorldSnapshot(io, world, serializeWorldState);
     });
   });
 }

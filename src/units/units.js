@@ -63,35 +63,172 @@ export function createUnit(id, x, y, owner = "player", variantId = "rifleman") {
   };
 }
 
+export function serializeUnit(unit) {
+  return {
+    id: unit.id,
+    owner: unit.owner,
+    variantId: unit.variantId,
+    unitClass: unit.unitClass,
+    x: unit.x,
+    y: unit.y,
+    health: unit.health,
+    maxHealth: unit.maxHealth,
+    attackDamage: unit.attackDamage,
+    attackRange: unit.attackRange,
+    attackCooldownTime: unit.attackCooldownTime,
+    armor: unit.defense || 0,
+    kills: unit.kills || 0,
+    attackTargetId: unit.attackTargetId || null,
+    isFiring: !!unit.isFiring,
+    isHoldingPosition: !!unit.isHoldingPosition,
+    isMoving: !!unit.isMoving,
+    destinationX: unit.destinationX,
+    destinationY: unit.destinationY,
+    orderQueue: unit.orderQueue || [],
+    speed: unit.speed || 0,
+    angle: unit.angle || 0,
+    isPlane: !!unit.isPlane,
+    isHelicopter: !!unit.isHelicopter,
+    damageModifiers: unit.damageModifiers || {},
+  };
+}
+
 export function serializeWorldState(state) {
   return {
     obstacles: state.obstacles,
     teamSelections: state.teamSelections,
-    units: state.units
-      .filter((unit) => unit.health > 0)
-      .map((unit) => ({
-        id: unit.id,
-        owner: unit.owner,
-        variantId: unit.variantId,
-        unitClass: unit.unitClass,
-        x: unit.x,
-        y: unit.y,
-        health: unit.health,
-        maxHealth: unit.maxHealth,
-        attackDamage: unit.attackDamage,
-        attackRange: unit.attackRange,
-        attackCooldownTime: unit.attackCooldownTime,
-        armor: unit.defense || 0,
-        kills: unit.kills || 0,
-        attackTargetId: unit.attackTargetId || null,
-        isFiring: !!unit.isFiring,
-        isHoldingPosition: !!unit.isHoldingPosition,
-        orderQueue: unit.orderQueue || [],
-        speed: unit.speed || 0,
-        angle: unit.angle || 0,
-        isPlane: !!unit.isPlane,
-        isHelicopter: !!unit.isHelicopter,
-        damageModifiers: unit.damageModifiers || {},
-      })),
+    units: state.units.filter((unit) => unit.health > 0).map(serializeUnit),
   };
+}
+
+function clonePlainValue(value) {
+  if (Array.isArray(value)) {
+    return value.map(clonePlainValue);
+  }
+
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entryValue]) => [key, clonePlainValue(entryValue)]),
+    );
+  }
+
+  return value;
+}
+
+function areValuesEqual(left, right) {
+  if (left === right) {
+    return true;
+  }
+
+  if (Array.isArray(left) && Array.isArray(right)) {
+    if (left.length !== right.length) {
+      return false;
+    }
+
+    for (let index = 0; index < left.length; index += 1) {
+      if (!areValuesEqual(left[index], right[index])) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  if (
+    left &&
+    right &&
+    typeof left === "object" &&
+    typeof right === "object"
+  ) {
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+
+    if (leftKeys.length !== rightKeys.length) {
+      return false;
+    }
+
+    for (const key of leftKeys) {
+      if (!areValuesEqual(left[key], right[key])) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  return false;
+}
+
+function createUnitPatch(previousUnit, nextUnit) {
+  const patch = { id: nextUnit.id };
+  let hasChanges = false;
+
+  for (const [key, value] of Object.entries(nextUnit)) {
+    if (key === "id") {
+      continue;
+    }
+
+    if (!areValuesEqual(previousUnit[key], value)) {
+      patch[key] = clonePlainValue(value);
+      hasChanges = true;
+    }
+  }
+
+  return hasChanges ? patch : null;
+}
+
+export function createSerializedWorldCache(snapshot) {
+  return {
+    obstacles: clonePlainValue(snapshot.obstacles),
+    teamSelections: clonePlainValue(snapshot.teamSelections),
+    unitsById: new Map(snapshot.units.map((unit) => [unit.id, clonePlainValue(unit)])),
+  };
+}
+
+export function createWorldDelta(snapshot, previousCache) {
+  const delta = {
+    units: [],
+    removedUnitIds: [],
+  };
+  const previousUnitsById = previousCache?.unitsById ?? new Map();
+  const nextUnitsById = new Map(snapshot.units.map((unit) => [unit.id, unit]));
+
+  for (const unit of snapshot.units) {
+    const previousUnit = previousUnitsById.get(unit.id);
+
+    if (!previousUnit) {
+      delta.units.push(clonePlainValue(unit));
+      continue;
+    }
+
+    const patch = createUnitPatch(previousUnit, unit);
+    if (patch) {
+      delta.units.push(patch);
+    }
+  }
+
+  for (const previousUnitId of previousUnitsById.keys()) {
+    if (!nextUnitsById.has(previousUnitId)) {
+      delta.removedUnitIds.push(previousUnitId);
+    }
+  }
+
+  if (!areValuesEqual(previousCache?.teamSelections, snapshot.teamSelections)) {
+    delta.teamSelections = clonePlainValue(snapshot.teamSelections);
+  }
+
+  if (!areValuesEqual(previousCache?.obstacles, snapshot.obstacles)) {
+    delta.obstacles = clonePlainValue(snapshot.obstacles);
+  }
+
+  return delta;
+}
+
+export function hasWorldDeltaChanges(delta) {
+  return (
+    delta.units.length > 0 ||
+    delta.removedUnitIds.length > 0 ||
+    delta.teamSelections !== undefined ||
+    delta.obstacles !== undefined
+  );
 }

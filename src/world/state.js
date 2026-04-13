@@ -4,7 +4,9 @@ export function createWorld() {
   return {
     currentTick: 0,
     lastBroadcastTick: -Infinity,
+    lastBroadcastState: null,
     pendingBroadcast: false,
+    forceFullSnapshot: false,
     state: {
       obstacles: OBSTACLES,
       units: [],

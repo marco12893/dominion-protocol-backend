@@ -3,6 +3,7 @@ import {
   UNIT_RADIUS,
   WORLD_STATE_BROADCAST_INTERVAL_TICKS,
 } from "../config/gameConstants.js";
+import { emitWorldDelta } from "../network/worldBroadcast.js";
 import { createSpatialIndex } from "./spatialIndex.js";
 import { getDistanceBetweenPoints } from "../utils/math.js";
 
@@ -106,9 +107,7 @@ export function createGameLoop({
       world.currentTick - (world.lastBroadcastTick ?? -Infinity) >=
         WORLD_STATE_BROADCAST_INTERVAL_TICKS
     ) {
-      io.emit("world:state", serializeWorldState(worldState));
-      world.lastBroadcastTick = world.currentTick;
-      world.pendingBroadcast = false;
+      emitWorldDelta(io, world, serializeWorldState);
     }
 
     world.currentTick += 1;
