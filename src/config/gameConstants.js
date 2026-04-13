@@ -152,7 +152,7 @@ export const UNIT_VARIANTS = {
     attackRange: 280,
     attackCooldown: PLANE_RELOAD_COOLDOWN,
     defense: 0,
-    speed: 540,
+    speed: 420,
     cost: 1000,
     damageModifiers: {
       [UNIT_CLASSES.UNARMORED]: 0.7,
