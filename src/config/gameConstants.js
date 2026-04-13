@@ -147,8 +147,8 @@ export const UNIT_VARIANTS = {
   },
   fighter: {
     unitClass: UNIT_CLASSES.PLANE,
-    maxHealth: 40,
-    attackDamage: 12,
+    maxHealth: 100,
+    attackDamage: 32,
     attackRange: 280,
     attackCooldown: PLANE_RELOAD_COOLDOWN,
     defense: 0,
@@ -164,7 +164,7 @@ export const UNIT_VARIANTS = {
   },
   bomber: {
     unitClass: UNIT_CLASSES.PLANE,
-    maxHealth: 320,
+    maxHealth: 240,
     attackDamage: 220,
     attackRange: BOMBER_DROP_RANGE,
     engagementRange: 280,
@@ -185,7 +185,7 @@ export const UNIT_VARIANTS = {
     maxHealth: 120,
     attackDamage: 14,
     attackRange: 320,
-    attackCooldown: 2.0,
+    attackCooldown: 1.2,
     defense: 1,
     speed: 160,
     cost: 600,
