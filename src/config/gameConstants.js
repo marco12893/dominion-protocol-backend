@@ -152,7 +152,7 @@ export const UNIT_VARIANTS = {
     attackRange: 280,
     attackCooldown: PLANE_RELOAD_COOLDOWN,
     defense: 0,
-    speed: 380,
+    speed: 450,
     cost: 1000,
     damageModifiers: {
       [UNIT_CLASSES.UNARMORED]: 0.7,
@@ -182,13 +182,13 @@ export const UNIT_VARIANTS = {
   },
   antiAir: {
     unitClass: UNIT_CLASSES.ARMORED,
-    maxHealth: 120,
-    attackDamage: 14,
+    maxHealth: 140,
+    attackDamage: 50,
     attackRange: 320,
     attackCooldown: 1.2,
-    defense: 1,
+    defense: 2,
     speed: 160,
-    cost: 600,
+    cost: 300,
     damageModifiers: {
       [UNIT_CLASSES.UNARMORED]: 0.0,
       [UNIT_CLASSES.ARMORED]: 0.0,
