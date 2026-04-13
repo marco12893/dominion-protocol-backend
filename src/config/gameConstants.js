@@ -113,13 +113,13 @@ export const UNIT_VARIANTS = {
   },
   heavyTank: {
     unitClass: UNIT_CLASSES.ARMORED,
-    maxHealth: 600,
-    attackDamage: 100,
-    attackRange: 200,
+    maxHealth: 800,
+    attackDamage: 160,
+    attackRange: 280,
     attackCooldown: 2.5,
-    defense: 5,
+    defense: 10,
     speed: 130,
-    cost: 1600,
+    cost: 1500,
     damageModifiers: {
       [UNIT_CLASSES.UNARMORED]: 0.35,
       [UNIT_CLASSES.ARMORED]: 1.0,
@@ -152,7 +152,7 @@ export const UNIT_VARIANTS = {
     attackRange: 280,
     attackCooldown: PLANE_RELOAD_COOLDOWN,
     defense: 0,
-    speed: 450,
+    speed: 540,
     cost: 1000,
     damageModifiers: {
       [UNIT_CLASSES.UNARMORED]: 0.7,
@@ -164,7 +164,7 @@ export const UNIT_VARIANTS = {
   },
   bomber: {
     unitClass: UNIT_CLASSES.PLANE,
-    maxHealth: 240,
+    maxHealth: 200,
     attackDamage: 220,
     attackRange: BOMBER_DROP_RANGE,
     engagementRange: 280,
@@ -188,7 +188,7 @@ export const UNIT_VARIANTS = {
     attackCooldown: 1.2,
     defense: 2,
     speed: 160,
-    cost: 300,
+    cost: 350,
     damageModifiers: {
       [UNIT_CLASSES.UNARMORED]: 0.0,
       [UNIT_CLASSES.ARMORED]: 0.0,
@@ -200,7 +200,7 @@ export const UNIT_VARIANTS = {
   attackHelicopter: {
     unitClass: UNIT_CLASSES.HELICOPTER,
     maxHealth: 150,
-    attackDamage: 12,
+    attackDamage: 15,
     attackRange: 160,
     attackCooldown: 0.25,
     defense: 1,
