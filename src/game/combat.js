@@ -82,7 +82,7 @@ export function createCombatSystem({ io, world, assignUnitPath }) {
     return Math.max(1, initialDamage - (target.defense || 0));
   }
 
-  function processBomberAttack(unit, target, deltaTime) {
+  function processBomberAttack(unit, target, deltaTime, tickContext) {
     let hasChanged = false;
     unit.isFiring = false;
 
@@ -130,32 +130,67 @@ export function createCombatSystem({ io, world, assignUnitPath }) {
       splashRadius: BOMBER_SPLASH_RADIUS,
     });
 
-    for (const splashTarget of worldState.units) {
-      if (
-        splashTarget.health <= 0 ||
-        splashTarget.owner === unit.owner ||
-        !unit.canTarget.includes(splashTarget.unitClass)
-      ) {
-        continue;
-      }
-
-      const splashDistance = getDistanceBetweenPoints(
+    if (tickContext?.spatialIndex) {
+      tickContext.spatialIndex.forEachInRange(
         impactPoint.x,
         impactPoint.y,
-        splashTarget.x,
-        splashTarget.y,
+        BOMBER_SPLASH_RADIUS,
+        (splashTarget) => {
+          if (
+            splashTarget.health <= 0 ||
+            splashTarget.owner === unit.owner ||
+            !unit.canTarget.includes(splashTarget.unitClass)
+          ) {
+            return;
+          }
+
+          const splashDistance = getDistanceBetweenPoints(
+            impactPoint.x,
+            impactPoint.y,
+            splashTarget.x,
+            splashTarget.y,
+          );
+          if (splashDistance > BOMBER_SPLASH_RADIUS) {
+            return;
+          }
+
+          const splashMultiplier =
+            splashTarget.id === target.id
+              ? 1
+              : Math.max(0.35, 1 - splashDistance / BOMBER_SPLASH_RADIUS);
+          const finalDamage = getFinalDamage(unit, splashTarget, splashMultiplier);
+
+          applyDamage(splashTarget, unit, finalDamage);
+        },
       );
-      if (splashDistance > BOMBER_SPLASH_RADIUS) {
-        continue;
+    } else {
+      for (const splashTarget of worldState.units) {
+        if (
+          splashTarget.health <= 0 ||
+          splashTarget.owner === unit.owner ||
+          !unit.canTarget.includes(splashTarget.unitClass)
+        ) {
+          continue;
+        }
+
+        const splashDistance = getDistanceBetweenPoints(
+          impactPoint.x,
+          impactPoint.y,
+          splashTarget.x,
+          splashTarget.y,
+        );
+        if (splashDistance > BOMBER_SPLASH_RADIUS) {
+          continue;
+        }
+
+        const splashMultiplier =
+          splashTarget.id === target.id
+            ? 1
+            : Math.max(0.35, 1 - splashDistance / BOMBER_SPLASH_RADIUS);
+        const finalDamage = getFinalDamage(unit, splashTarget, splashMultiplier);
+
+        applyDamage(splashTarget, unit, finalDamage);
       }
-
-      const splashMultiplier =
-        splashTarget.id === target.id
-          ? 1
-          : Math.max(0.35, 1 - splashDistance / BOMBER_SPLASH_RADIUS);
-      const finalDamage = getFinalDamage(unit, splashTarget, splashMultiplier);
-
-      applyDamage(splashTarget, unit, finalDamage);
     }
 
     unit.attackCooldown = unit.attackCooldownTime;
@@ -173,9 +208,9 @@ export function createCombatSystem({ io, world, assignUnitPath }) {
     return true;
   }
 
-  function processPlaneAttack(unit, target, deltaTime) {
+  function processPlaneAttack(unit, target, deltaTime, tickContext) {
     if (unit.variantId === "bomber") {
-      return processBomberAttack(unit, target, deltaTime);
+      return processBomberAttack(unit, target, deltaTime, tickContext);
     }
 
     let hasChanged = false;
@@ -238,7 +273,7 @@ export function createCombatSystem({ io, world, assignUnitPath }) {
     return true;
   }
 
-  function processAttacks(units, deltaTime) {
+  function processAttacks(units, deltaTime, tickContext) {
     let hasChanged = false;
 
     for (const unit of units) {
@@ -248,9 +283,8 @@ export function createCombatSystem({ io, world, assignUnitPath }) {
         continue;
       }
 
-      const target = units.find(
-        (entry) => entry.id === unit.attackTargetId && entry.health > 0,
-      );
+      const indexedTarget = tickContext?.unitMap?.get(unit.attackTargetId) ?? null;
+      const target = indexedTarget && indexedTarget.health > 0 ? indexedTarget : null;
 
       if (!target) {
         unit.attackTargetId = null;
@@ -276,7 +310,7 @@ export function createCombatSystem({ io, world, assignUnitPath }) {
           continue;
         }
 
-        if (processPlaneAttack(unit, target, deltaTime)) {
+        if (processPlaneAttack(unit, target, deltaTime, tickContext)) {
           hasChanged = true;
         }
         continue;

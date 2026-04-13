@@ -1,4 +1,9 @@
-import { TICK_RATE, UNIT_RADIUS } from "../config/gameConstants.js";
+import {
+  TICK_RATE,
+  UNIT_RADIUS,
+  WORLD_STATE_BROADCAST_INTERVAL_TICKS,
+} from "../config/gameConstants.js";
+import { createSpatialIndex } from "./spatialIndex.js";
 import { getDistanceBetweenPoints } from "../utils/math.js";
 
 export function createGameLoop({
@@ -27,7 +32,14 @@ export function createGameLoop({
       }
     }
 
-    for (const unit of worldState.units) {
+    const startOfTickAliveUnits = worldState.units.filter((unit) => unit.health > 0);
+    const tickSpatialIndex = createSpatialIndex(startOfTickAliveUnits);
+    const tickContext = {
+      spatialIndex: tickSpatialIndex,
+      unitMap: tickSpatialIndex.unitMap,
+    };
+
+    for (const unit of startOfTickAliveUnits) {
       if (unit.health <= 0 || unit.attackTargetId) {
         continue;
       }
@@ -49,13 +61,13 @@ export function createGameLoop({
         const engagementRange = unit.engagementRange ?? unit.attackRange;
         let minDistance = unit.isPlane ? engagementRange * 1.5 : engagementRange;
 
-        for (const otherUnit of worldState.units) {
+        tickSpatialIndex.forEachInRange(unit.x, unit.y, minDistance, (otherUnit) => {
           if (otherUnit.id === unit.id || otherUnit.health <= 0 || otherUnit.owner === unit.owner) {
-            continue;
+            return;
           }
 
           if (!unit.canTarget.includes(otherUnit.unitClass)) {
-            continue;
+            return;
           }
 
           const distance = getDistanceBetweenPoints(unit.x, unit.y, otherUnit.x, otherUnit.y);
@@ -63,7 +75,7 @@ export function createGameLoop({
             minDistance = distance;
             nearestTarget = otherUnit;
           }
-        }
+        });
 
         if (nearestTarget) {
           unit.attackTargetId = nearestTarget.id;
@@ -72,14 +84,14 @@ export function createGameLoop({
       }
     }
 
-    hasMoved = processAttacks(worldState.units, 1 / TICK_RATE) || hasMoved;
+    hasMoved = processAttacks(startOfTickAliveUnits, 1 / TICK_RATE, tickContext) || hasMoved;
 
-    for (const unit of worldState.units) {
+    for (const unit of startOfTickAliveUnits) {
       if (unit.health <= 0) {
         continue;
       }
 
-      hasMoved = advanceUnit(unit, 1 / TICK_RATE) || hasMoved;
+      hasMoved = advanceUnit(unit, 1 / TICK_RATE, tickContext) || hasMoved;
     }
 
     const aliveUnits = worldState.units.filter((unit) => unit.health > 0);
@@ -87,8 +99,16 @@ export function createGameLoop({
     hasMoved = resolveUnitCollisions(aliveUnits) || hasMoved;
     hasMoved = detectAndResolveDeadlocks(aliveUnits) || hasMoved;
 
-    if (hasMoved) {
+    world.pendingBroadcast = world.pendingBroadcast || hasMoved;
+
+    if (
+      world.pendingBroadcast &&
+      world.currentTick - (world.lastBroadcastTick ?? -Infinity) >=
+        WORLD_STATE_BROADCAST_INTERVAL_TICKS
+    ) {
       io.emit("world:state", serializeWorldState(worldState));
+      world.lastBroadcastTick = world.currentTick;
+      world.pendingBroadcast = false;
     }
 
     world.currentTick += 1;

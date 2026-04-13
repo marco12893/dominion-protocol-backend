@@ -34,6 +34,7 @@ import {
   negateVector,
   normalizeVector,
 } from "../utils/math.js";
+import { createSpatialIndex } from "./spatialIndex.js";
 import {
   clampPointToMap,
   clampUnitPosition,
@@ -112,9 +113,9 @@ export function createMovementSystem({ worldState }) {
     unit.isMoving = true;
   }
 
-  function advanceUnit(unit, deltaTime) {
+  function advanceUnit(unit, deltaTime, tickContext) {
     if (unit.isPlane) {
-      return advancePlane(unit, deltaTime);
+      return advancePlane(unit, deltaTime, tickContext);
     }
 
     if (!unit.isMoving) {
@@ -202,16 +203,20 @@ export function createMovementSystem({ worldState }) {
 
     for (let pass = 0; pass < COLLISION_PASSES; pass += 1) {
       let passAdjusted = false;
+      const spatialIndex = createSpatialIndex(units);
 
       for (let index = 0; index < units.length; index += 1) {
-        for (let compareIndex = index + 1; compareIndex < units.length; compareIndex += 1) {
-          const unit = units[index];
-          const otherUnit = units[compareIndex];
+        const unit = units[index];
+        spatialIndex.forEachInRange(unit.x, unit.y, minimumDistance, (otherUnit) => {
+          const compareIndex = spatialIndex.getUnitOrder(otherUnit.id);
+          if (compareIndex <= index) {
+            return;
+          }
 
           const unitIsAir = unit.isPlane || unit.isHelicopter;
           const otherIsAir = otherUnit.isPlane || otherUnit.isHelicopter;
           if (unitIsAir !== otherIsAir) {
-            continue;
+            return;
           }
 
           const dx = otherUnit.x - unit.x;
@@ -219,7 +224,7 @@ export function createMovementSystem({ worldState }) {
           const distance = Math.hypot(dx, dy);
 
           if (distance >= minimumDistance) {
-            continue;
+            return;
           }
 
           const overlap = minimumDistance - distance;
@@ -250,7 +255,7 @@ export function createMovementSystem({ worldState }) {
           otherUnit.y = otherResolvedPosition.y;
 
           passAdjusted = true;
-        }
+        });
       }
 
       hasAdjusted = passAdjusted || hasAdjusted;
@@ -353,10 +358,11 @@ export function createMovementSystem({ worldState }) {
     return true;
   }
 
-  function advancePlane(unit, deltaTime) {
-    const attackTarget = unit.attackTargetId
-      ? worldState.units.find((entry) => entry.id === unit.attackTargetId && entry.health > 0)
+  function advancePlane(unit, deltaTime, tickContext) {
+    const indexedTarget = unit.attackTargetId
+      ? tickContext?.unitMap?.get(unit.attackTargetId) ?? null
       : null;
+    const attackTarget = indexedTarget && indexedTarget.health > 0 ? indexedTarget : null;
     const attackMoveCenter = getPlaneAttackMoveCenter(unit);
     const shouldMaintainEgress =
       unit.variantId === "bomber" &&

@@ -3,6 +3,7 @@ export const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN ?? "http://localhost:3000
 export const MAP_WIDTH = 3200;
 export const MAP_HEIGHT = 3200;
 export const TICK_RATE = 60;
+export const WORLD_STATE_BROADCAST_INTERVAL_TICKS = 2;
 export const UNIT_SPEED = 180;
 export const FORMATION_SPACING = 28;
 export const UNIT_RADIUS = 10;
@@ -17,6 +18,7 @@ export const STUCK_MOVEMENT_EPSILON = 1.1;
 export const STUCK_PROGRESS_EPSILON = 0.75;
 export const STUCK_TICKS_THRESHOLD = 18;
 export const REPATH_COOLDOWN_TICKS = 12;
+export const SPATIAL_HASH_CELL_SIZE = 120;
 
 export const UNIT_CLASSES = {
   UNARMORED: "unarmored",
