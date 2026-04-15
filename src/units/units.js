@@ -53,6 +53,8 @@ export function createUnit(id, x, y, owner = "player", variantId = "rifleman") {
     angle: 0,
     isPlane: variantProps.unitClass === UNIT_CLASSES.PLANE,
     isHelicopter: variantProps.unitClass === UNIT_CLASSES.HELICOPTER,
+    width: variantProps.width || 20,
+    height: variantProps.height || 20,
     loiterCenter: null,
     egressPoint: null,
     egressDistance: 0,
@@ -89,6 +91,8 @@ export function serializeUnit(unit) {
     angle: unit.angle || 0,
     isPlane: !!unit.isPlane,
     isHelicopter: !!unit.isHelicopter,
+    width: unit.width || 20,
+    height: unit.height || 20,
     damageModifiers: unit.damageModifiers || {},
   };
 }

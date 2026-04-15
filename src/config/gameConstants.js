@@ -69,6 +69,8 @@ export const UNIT_VARIANTS = {
     defense: 0,
     speed: 180,
     cost: 100,
+    width: 18,
+    height: 18,
     damageModifiers: {
       [UNIT_CLASSES.UNARMORED]: 1.0,
       [UNIT_CLASSES.ARMORED]: 0.15,
@@ -86,6 +88,8 @@ export const UNIT_VARIANTS = {
     defense: 6,
     speed: 230,
     cost: 500,
+    width: 60,
+    height: 60,
     damageModifiers: {
       [UNIT_CLASSES.UNARMORED]: 1.0,
       [UNIT_CLASSES.ARMORED]: 0.25,
@@ -103,6 +107,8 @@ export const UNIT_VARIANTS = {
     defense: 3,
     speed: 280,
     cost: 850,
+    width: 75,
+    height: 95,
     damageModifiers: {
       [UNIT_CLASSES.UNARMORED]: 0.35,
       [UNIT_CLASSES.ARMORED]: 1.0,
@@ -120,6 +126,8 @@ export const UNIT_VARIANTS = {
     defense: 10,
     speed: 130,
     cost: 1500,
+    width: 100,
+    height: 130,
     damageModifiers: {
       [UNIT_CLASSES.UNARMORED]: 0.35,
       [UNIT_CLASSES.ARMORED]: 1.0,
@@ -137,6 +145,8 @@ export const UNIT_VARIANTS = {
     defense: 0,
     speed: 140,
     cost: 250,
+    width: 18,
+    height: 18,
     damageModifiers: {
       [UNIT_CLASSES.UNARMORED]: 0.25,
       [UNIT_CLASSES.ARMORED]: 1.0,
@@ -154,6 +164,8 @@ export const UNIT_VARIANTS = {
     defense: 0,
     speed: 420,
     cost: 1000,
+    width: 110,
+    height: 150,
     damageModifiers: {
       [UNIT_CLASSES.UNARMORED]: 0.7,
       [UNIT_CLASSES.ARMORED]: 0.3,
@@ -172,6 +184,8 @@ export const UNIT_VARIANTS = {
     defense: 8,
     speed: 300,
     cost: 1800,
+    width: 190,
+    height: 190,
     damageModifiers: {
       [UNIT_CLASSES.UNARMORED]: 1.2,
       [UNIT_CLASSES.ARMORED]: 1.0,
@@ -189,6 +203,8 @@ export const UNIT_VARIANTS = {
     defense: 2,
     speed: 160,
     cost: 350,
+    width: 60,
+    height: 60,
     damageModifiers: {
       [UNIT_CLASSES.UNARMORED]: 0.0,
       [UNIT_CLASSES.ARMORED]: 0.0,
@@ -206,6 +222,8 @@ export const UNIT_VARIANTS = {
     defense: 1,
     speed: 180,
     cost: 700,
+    width: 75,
+    height: 75,
     damageModifiers: {
       [UNIT_CLASSES.UNARMORED]: 1.0,
       [UNIT_CLASSES.ARMORED]: 0.5,

@@ -170,40 +170,39 @@ export function createMovementSystem({ worldState }) {
 
     for (const unit of units) {
       if (unit.isPlane || unit.isHelicopter) continue;
+      
+      const halfW = (unit.width || 20) / 2;
+      const halfH = (unit.height || 20) / 2;
+      
       for (const obstacle of OBSTACLES) {
-        const expanded = expandObstacle(obstacle, UNIT_RADIUS);
+        // Simple AABB for obstacles for performance
+        const buffer = 2;
+        const left = obstacle.x - halfW - buffer;
+        const right = obstacle.x + obstacle.width + halfW + buffer;
+        const top = obstacle.y - halfH - buffer;
+        const bottom = obstacle.y + obstacle.height + halfH + buffer;
 
-        if (!isPointInsideRect(unit.x, unit.y, expanded)) {
-          continue;
+        if (unit.x > left && unit.x < right && unit.y > top && unit.y < bottom) {
+          const dists = [
+            { side: "left", val: Math.abs(unit.x - left) },
+            { side: "right", val: Math.abs(right - unit.x) },
+            { side: "top", val: Math.abs(unit.y - top) },
+            { side: "bottom", val: Math.abs(bottom - unit.y) },
+          ];
+          dists.sort((a, b) => a.val - b.val);
+
+          switch (dists[0].side) {
+            case "left": unit.x = left; break;
+            case "right": unit.x = right; break;
+            case "top": unit.y = top; break;
+            default: unit.y = bottom; break;
+          }
+          hasAdjusted = true;
         }
-
-        const distances = [
-          { side: "left", value: Math.abs(unit.x - expanded.x) },
-          { side: "right", value: Math.abs(expanded.x + expanded.width - unit.x) },
-          { side: "top", value: Math.abs(unit.y - expanded.y) },
-          { side: "bottom", value: Math.abs(expanded.y + expanded.height - unit.y) },
-        ];
-        distances.sort((left, right) => left.value - right.value);
-
-        switch (distances[0].side) {
-          case "left":
-            unit.x = expanded.x;
-            break;
-          case "right":
-            unit.x = expanded.x + expanded.width;
-            break;
-          case "top":
-            unit.y = expanded.y;
-            break;
-          default:
-            unit.y = expanded.y + expanded.height;
-            break;
-        }
-
-        unit.x = clamp(unit.x, UNIT_RADIUS, MAP_WIDTH - UNIT_RADIUS);
-        unit.y = clamp(unit.y, UNIT_RADIUS, MAP_HEIGHT - UNIT_RADIUS);
-        hasAdjusted = true;
       }
+      
+      unit.x = clamp(unit.x, halfW, MAP_WIDTH - halfW);
+      unit.y = clamp(unit.y, halfH, MAP_HEIGHT - halfH);
     }
 
     return hasAdjusted;
@@ -211,7 +210,6 @@ export function createMovementSystem({ worldState }) {
 
   function resolveUnitCollisions(units) {
     let hasAdjusted = false;
-    const minimumDistance = UNIT_RADIUS * 2;
 
     for (let pass = 0; pass < COLLISION_PASSES; pass += 1) {
       let passAdjusted = false;
@@ -219,34 +217,29 @@ export function createMovementSystem({ worldState }) {
 
       for (let index = 0; index < units.length; index += 1) {
         const unit = units[index];
-        spatialIndex.forEachInRange(unit.x, unit.y, minimumDistance, (otherUnit) => {
+        // Dynamic search radius based on unit's largest dimension + a safety margin
+        const searchRadius = Math.max(unit.width, unit.height, 60);
+
+        spatialIndex.forEachInRange(unit.x, unit.y, searchRadius, (otherUnit) => {
           const compareIndex = spatialIndex.getUnitOrder(otherUnit.id);
-          if (compareIndex <= index) {
-            return;
-          }
+          if (compareIndex <= index) return;
 
           const unitIsAir = unit.isPlane || unit.isHelicopter;
           const otherIsAir = otherUnit.isPlane || otherUnit.isHelicopter;
-          if (unitIsAir !== otherIsAir) {
-            return;
-          }
+          if (unitIsAir !== otherIsAir) return;
 
-          const dx = otherUnit.x - unit.x;
-          const dy = otherUnit.y - unit.y;
-          const distance = Math.hypot(dx, dy);
+          const collision = checkOBBCollision(unit, otherUnit);
+          if (!collision) return;
 
-          if (distance >= minimumDistance) {
-            return;
-          }
+          const overlap = collision.overlap;
+          const normalX = collision.axis.x;
+          const normalY = collision.axis.y;
 
-          const overlap = minimumDistance - distance;
-          const separationNormal = getCollisionSeparationNormal(unit, otherUnit, dx, dy);
-          const normalX = separationNormal.x;
-          const normalY = separationNormal.y;
           const pushWeights = getPushWeights(unit, otherUnit);
           const totalWeight = pushWeights.first + pushWeights.second;
           const firstShare = totalWeight === 0 ? 0.5 : pushWeights.second / totalWeight;
           const secondShare = totalWeight === 0 ? 0.5 : pushWeights.first / totalWeight;
+
           const firstSeparationX = normalX * overlap * firstShare;
           const firstSeparationY = normalY * overlap * firstShare;
           const secondSeparationX = normalX * overlap * secondShare;
@@ -271,13 +264,74 @@ export function createMovementSystem({ worldState }) {
       }
 
       hasAdjusted = passAdjusted || hasAdjusted;
-
-      if (!passAdjusted) {
-        break;
-      }
+      if (!passAdjusted) break;
     }
 
     return hasAdjusted;
+  }
+
+  function getUnitCorners(unit) {
+    const angle = unit.angle || 0;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const hw = unit.width / 2;
+    const hh = unit.height / 2;
+
+    return [
+      { x: unit.x + cos * -hw - sin * -hh, y: unit.y + sin * -hw + cos * -hh },
+      { x: unit.x + cos * hw - sin * -hh, y: unit.y + sin * hw + cos * -hh },
+      { x: unit.x + cos * hw - sin * hh, y: unit.y + sin * hw + cos * hh },
+      { x: unit.x + cos * -hw - sin * hh, y: unit.y + sin * -hw + cos * hh },
+    ];
+  }
+
+  function checkOBBCollision(unitA, unitB) {
+    const cornersA = getUnitCorners(unitA);
+    const cornersB = getUnitCorners(unitB);
+
+    const axes = [
+      { x: cornersA[1].x - cornersA[0].x, y: cornersA[1].y - cornersA[0].y },
+      { x: cornersA[1].x - cornersA[2].x, y: cornersA[1].y - cornersA[2].y },
+      { x: cornersB[1].x - cornersB[0].x, y: cornersB[1].y - cornersB[0].y },
+      { x: cornersB[1].x - cornersB[2].x, y: cornersB[1].y - cornersB[2].y },
+    ];
+
+    let minOverlap = Infinity;
+    let smallestAxis = null;
+
+    for (const axis of axes) {
+      const mag = Math.hypot(axis.x, axis.y);
+      if (mag === 0) continue;
+      const normAxis = { x: axis.x / mag, y: axis.y / mag };
+
+      const project = (corners) => {
+        let min = Infinity, max = -Infinity;
+        for (const p of corners) {
+          const dot = p.x * normAxis.x + p.y * normAxis.y;
+          if (dot < min) min = dot;
+          if (dot > max) max = dot;
+        }
+        return { min, max };
+      };
+
+      const projA = project(cornersA);
+      const projB = project(cornersB);
+
+      const overlap = Math.min(projA.max, projB.max) - Math.max(projA.min, projB.min);
+      if (overlap <= 0) return null;
+
+      if (overlap < minOverlap) {
+        minOverlap = overlap;
+        smallestAxis = normAxis;
+      }
+    }
+
+    const dot = (unitB.x - unitA.x) * smallestAxis.x + (unitB.y - unitA.y) * smallestAxis.y;
+    if (dot < 0) {
+      smallestAxis = { x: -smallestAxis.x, y: -smallestAxis.y };
+    }
+
+    return { axis: smallestAxis, overlap: minOverlap };
   }
 
   function detectAndResolveDeadlocks(units) {
