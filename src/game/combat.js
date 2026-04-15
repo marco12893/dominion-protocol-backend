@@ -352,6 +352,17 @@ export function createCombatSystem({ io, world, assignUnitPath }) {
       unit.destinationX = unit.x;
       unit.destinationY = unit.y;
       unit.isFiring = true;
+      
+      const targetAngle = Math.atan2(target.y - unit.y, target.x - unit.x);
+      const angleDiff = getAngleDelta(unit.angle || 0, targetAngle);
+      const turnStep = 12.0 * deltaTime;
+
+      if (Math.abs(angleDiff) < turnStep) {
+        unit.angle = targetAngle;
+      } else {
+        unit.angle += Math.sign(angleDiff) * turnStep;
+      }
+
       hasChanged = true;
 
       if (unit.attackCooldown > 0) {

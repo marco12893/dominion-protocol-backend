@@ -150,6 +150,18 @@ export function createMovementSystem({ worldState }) {
 
     unit.x += (dx / distance) * step;
     unit.y += (dy / distance) * step;
+
+    const targetAngle = Math.atan2(dy, dx);
+    const angleDiff = getAngleDelta(unit.angle || 0, targetAngle);
+    const turnSpeed = 10.0; // Radians per second
+    const turnStep = turnSpeed * deltaTime;
+
+    if (Math.abs(angleDiff) < turnStep) {
+      unit.angle = targetAngle;
+    } else {
+      unit.angle += Math.sign(angleDiff) * turnStep;
+    }
+
     return true;
   }
 
