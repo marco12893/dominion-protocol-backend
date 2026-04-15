@@ -224,9 +224,9 @@ export function createMovementSystem({ worldState }) {
           const compareIndex = spatialIndex.getUnitOrder(otherUnit.id);
           if (compareIndex <= index) return;
 
-          const unitIsAir = unit.isPlane || unit.isHelicopter;
-          const otherIsAir = otherUnit.isPlane || otherUnit.isHelicopter;
-          if (unitIsAir !== otherIsAir) return;
+          const unitType = unit.isPlane ? "plane" : unit.isHelicopter ? "helicopter" : "ground";
+          const otherType = otherUnit.isPlane ? "plane" : otherUnit.isHelicopter ? "helicopter" : "ground";
+          if (unitType !== otherType || unitType === "plane") return;
 
           const collision = checkOBBCollision(unit, otherUnit);
           if (!collision) return;
