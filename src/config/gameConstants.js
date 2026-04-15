@@ -220,7 +220,7 @@ export const UNIT_VARIANTS = {
     attackRange: 160,
     attackCooldown: 0.25,
     defense: 1,
-    speed: 180,
+    speed: 250,
     cost: 700,
     width: 75,
     height: 75,
