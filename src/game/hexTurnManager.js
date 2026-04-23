@@ -2,51 +2,53 @@
  * Server-side hex turn manager for Layer 2 strategic map.
  *
  * Manages hex units, pending moves, turn resolution, and player readiness.
- * Moves are private — each player can only see their own pending moves
+ * Moves are private - each player can only see their own pending moves
  * until the turn resolves.
  */
 
-import { hexDistance, getHexesInRange } from "../utils/hexMath.js";
+import { hexDistance } from "../utils/hexMath.js";
+import {
+  HEX_CITIES,
+  HEX_GRID_COLS,
+  HEX_GRID_ROWS,
+  HEX_MOVEMENT_RANGE,
+  INITIAL_HEX_UNITS,
+} from "./hexConfig.js";
+import { generateHexTerrain } from "../world/terrainGeneration.js";
 
-// ─── Constants ───────────────────────────────────────────────────────────────
-const GRID_COLS = 40;
-const GRID_ROWS = 30;
-const MOVEMENT_RANGE = 2;
+function createTerrainSnapshot(seed = Date.now()) {
+  const terrainSeed = (Number(seed) >>> 0) || 1;
 
-const INITIAL_HEX_UNITS = [
-  { id: "hex-u1", col: 5, row: 4, owner: "blue" },
-  { id: "hex-u2", col: 8, row: 8, owner: "blue" },
-  { id: "hex-u3", col: 10, row: 6, owner: "blue" },
-  { id: "hex-u4", col: 32, row: 21, owner: "red" },
-  { id: "hex-u5", col: 35, row: 23, owner: "red" },
-  { id: "hex-u6", col: 30, row: 24, owner: "red" },
-];
-
-// ─── Manager ─────────────────────────────────────────────────────────────────
+  return {
+    terrainSeed,
+    terrainTiles: generateHexTerrain({
+      cols: HEX_GRID_COLS,
+      rows: HEX_GRID_ROWS,
+      seed: terrainSeed,
+      protectedCenters: HEX_CITIES,
+    }),
+  };
+}
 
 export function createHexTurnManager() {
-  let hexUnits = INITIAL_HEX_UNITS.map((u) => ({ ...u }));
-  const pendingMoves = new Map(); // unitId → { toCol, toRow, owner }
-  const readyPlayers = new Set(); // "blue" | "red"
+  let hexUnits = INITIAL_HEX_UNITS.map((unit) => ({ ...unit }));
+  const pendingMoves = new Map();
+  const readyPlayers = new Set();
   let turnNumber = 1;
   let isResolving = false;
+  let { terrainSeed, terrainTiles } = createTerrainSnapshot();
 
-  /**
-   * Returns the full state snapshot (for initial sync on connect).
-   */
   function getState() {
     return {
-      hexUnits: hexUnits.map((u) => ({ ...u })),
+      terrainSeed,
+      terrainTiles,
+      hexUnits: hexUnits.map((unit) => ({ ...unit })),
       turnNumber,
       readyPlayers: [...readyPlayers],
       isResolving,
     };
   }
 
-  /**
-   * Returns the state visible to a specific player.
-   * Each player only sees their own pending moves.
-   */
   function getStateForPlayer(playerColor) {
     const ownMoves = {};
     for (const [unitId, move] of pendingMoves) {
@@ -56,7 +58,9 @@ export function createHexTurnManager() {
     }
 
     return {
-      hexUnits: hexUnits.map((u) => ({ ...u })),
+      terrainSeed,
+      terrainTiles,
+      hexUnits: hexUnits.map((unit) => ({ ...unit })),
       turnNumber,
       readyPlayers: [...readyPlayers],
       isResolving,
@@ -64,9 +68,6 @@ export function createHexTurnManager() {
     };
   }
 
-  /**
-   * Submit a move for a unit. Returns { success, error? }.
-   */
   function submitMove(playerColor, unitId, toCol, toRow) {
     if (isResolving) {
       return { success: false, error: "Turn is resolving" };
@@ -76,7 +77,7 @@ export function createHexTurnManager() {
       return { success: false, error: "Already marked ready" };
     }
 
-    const unit = hexUnits.find((u) => u.id === unitId);
+    const unit = hexUnits.find((entry) => entry.id === unitId);
     if (!unit) {
       return { success: false, error: "Unit not found" };
     }
@@ -85,25 +86,21 @@ export function createHexTurnManager() {
       return { success: false, error: "Not your unit" };
     }
 
-    // Validate grid bounds
-    if (toCol < 0 || toCol >= GRID_COLS || toRow < 0 || toRow >= GRID_ROWS) {
+    if (toCol < 0 || toCol >= HEX_GRID_COLS || toRow < 0 || toRow >= HEX_GRID_ROWS) {
       return { success: false, error: "Out of bounds" };
     }
 
-    // Validate movement range
-    const dist = hexDistance(unit.col, unit.row, toCol, toRow);
-    if (dist > MOVEMENT_RANGE || dist === 0) {
+    const distance = hexDistance(unit.col, unit.row, toCol, toRow);
+    if (distance > HEX_MOVEMENT_RANGE || distance === 0) {
       return { success: false, error: "Out of range" };
     }
 
-    // Check if target hex is occupied by another unit
-    const occupied = hexUnits.some((u) => u.col === toCol && u.row === toRow);
+    const occupied = hexUnits.some((entry) => entry.col === toCol && entry.row === toRow);
     if (occupied) {
       return { success: false, error: "Hex occupied by unit" };
     }
 
-    // Check if another of this player's pending moves targets this hex
-    for (const [existingUnitId, move] of pendingMoves) {
+    for (const [, move] of pendingMoves) {
       if (move.owner === playerColor && move.toCol === toCol && move.toRow === toRow) {
         return { success: false, error: "Hex targeted by another pending move" };
       }
@@ -113,9 +110,6 @@ export function createHexTurnManager() {
     return { success: true };
   }
 
-  /**
-   * Cancel a pending move. Returns { success, error? }.
-   */
   function cancelMove(playerColor, unitId) {
     if (isResolving) {
       return { success: false, error: "Turn is resolving" };
@@ -134,9 +128,6 @@ export function createHexTurnManager() {
     return { success: true };
   }
 
-  /**
-   * Mark a player as ready. Returns { success, allReady }.
-   */
   function setPlayerReady(playerColor) {
     if (isResolving) {
       return { success: false, allReady: false, error: "Turn is resolving" };
@@ -148,9 +139,6 @@ export function createHexTurnManager() {
     return { success: true, allReady };
   }
 
-  /**
-   * Unmark a player as ready. Returns { success }.
-   */
   function setPlayerUnready(playerColor) {
     if (isResolving) {
       return { success: false, error: "Turn is resolving" };
@@ -164,29 +152,26 @@ export function createHexTurnManager() {
     return { success: true };
   }
 
-  /**
-   * Resolve the current turn. Applies all pending moves simultaneously.
-   * Returns the resolved state with applied moves for animation.
-   */
   function resolveTurn() {
     isResolving = true;
 
-    // Collect all moves to apply
     const appliedMoves = [];
     for (const [unitId, move] of pendingMoves) {
-      const unit = hexUnits.find((u) => u.id === unitId);
-      if (unit) {
-        appliedMoves.push({
-          unitId,
-          fromCol: unit.col,
-          fromRow: unit.row,
-          toCol: move.toCol,
-          toRow: move.toRow,
-          owner: move.owner,
-        });
-        unit.col = move.toCol;
-        unit.row = move.toRow;
+      const unit = hexUnits.find((entry) => entry.id === unitId);
+      if (!unit) {
+        continue;
       }
+
+      appliedMoves.push({
+        unitId,
+        fromCol: unit.col,
+        fromRow: unit.row,
+        toCol: move.toCol,
+        toRow: move.toRow,
+        owner: move.owner,
+      });
+      unit.col = move.toCol;
+      unit.row = move.toRow;
     }
 
     pendingMoves.clear();
@@ -195,21 +180,20 @@ export function createHexTurnManager() {
     isResolving = false;
 
     return {
-      hexUnits: hexUnits.map((u) => ({ ...u })),
+      hexUnits: hexUnits.map((unit) => ({ ...unit })),
       turnNumber,
       appliedMoves,
     };
   }
 
-  /**
-   * Reset to initial state.
-   */
   function reset() {
-    hexUnits = INITIAL_HEX_UNITS.map((u) => ({ ...u }));
+    hexUnits = INITIAL_HEX_UNITS.map((unit) => ({ ...unit }));
     pendingMoves.clear();
     readyPlayers.clear();
     turnNumber = 1;
     isResolving = false;
+
+    ({ terrainSeed, terrainTiles } = createTerrainSnapshot());
   }
 
   return {
