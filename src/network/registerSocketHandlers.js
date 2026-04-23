@@ -37,6 +37,7 @@ export function registerSocketHandlers({
       playerAssignments.set(socket.id, color);
 
       emitWorldSnapshot(io, world, serializeWorldState);
+      socket.emit("hex:state", world.hexTurnManager.getStateForPlayer(color));
     });
 
     socket.on("player:deploy", (manifest) => {
@@ -218,8 +219,12 @@ export function registerSocketHandlers({
       worldState.teamSelections.red.hasDeployed = false;
       playerAssignments.clear();
 
+      // Reset hex grid state
+      world.hexTurnManager.reset();
+
       io.emit("game:reset");
       emitWorldSnapshot(io, world, serializeWorldState);
+      io.emit("hex:state", world.hexTurnManager.getState());
     });
 
     socket.on("disconnect", () => {
@@ -253,6 +258,76 @@ export function registerSocketHandlers({
       }
 
       emitWorldSnapshot(io, world, serializeWorldState);
+    });
+
+    // ─── Hex Grid (Layer 2) Events ─────────────────────────────────────────
+
+    const hexManager = world.hexTurnManager;
+
+    // Send hex state on connect (player-specific, with only their own pending moves)
+    const initialColor = playerAssignments.get(socket.id);
+    socket.emit(
+      "hex:state",
+      initialColor ? hexManager.getStateForPlayer(initialColor) : hexManager.getState(),
+    );
+
+    socket.on("hex:submitMove", ({ unitId, toCol, toRow }) => {
+      const color = playerAssignments.get(socket.id);
+      if (!color) return;
+
+      const result = hexManager.submitMove(color, unitId, toCol, toRow);
+      if (result.success) {
+        // Only send back to the player who submitted — moves are private
+        socket.emit("hex:moveSubmitted", { unitId, toCol, toRow });
+      } else {
+        socket.emit("hex:moveRejected", { unitId, error: result.error });
+      }
+    });
+
+    socket.on("hex:cancelMove", ({ unitId }) => {
+      const color = playerAssignments.get(socket.id);
+      if (!color) return;
+
+      const result = hexManager.cancelMove(color, unitId);
+      if (result.success) {
+        socket.emit("hex:moveCancelled", { unitId });
+      }
+    });
+
+    socket.on("hex:endTurn", () => {
+      const color = playerAssignments.get(socket.id);
+      if (!color) return;
+
+      const result = hexManager.setPlayerReady(color);
+      if (!result.success) return;
+
+      // Broadcast to all that this player is ready
+      io.emit("hex:playerReady", { playerColor: color });
+
+      // If both players are ready, resolve the turn
+      if (result.allReady) {
+        const resolved = hexManager.resolveTurn();
+        io.emit("hex:turnResolved", resolved);
+      }
+    });
+
+    socket.on("hex:cancelReady", () => {
+      const color = playerAssignments.get(socket.id);
+      if (!color) return;
+
+      const result = hexManager.setPlayerUnready(color);
+      if (result.success) {
+        io.emit("hex:playerUnready", { playerColor: color });
+      }
+    });
+
+    socket.on("hex:requestState", () => {
+      const color = playerAssignments.get(socket.id);
+      if (!color) {
+        socket.emit("hex:state", hexManager.getState());
+      } else {
+        socket.emit("hex:state", hexManager.getStateForPlayer(color));
+      }
     });
   });
 }

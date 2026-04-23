@@ -1,4 +1,5 @@
 import { OBSTACLES } from "../config/gameConstants.js";
+import { createHexTurnManager } from "../game/hexTurnManager.js";
 
 export function createWorld() {
   return {
@@ -16,5 +17,6 @@ export function createWorld() {
       },
     },
     playerAssignments: new Map(),
+    hexTurnManager: createHexTurnManager(),
   };
 }
