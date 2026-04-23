@@ -1,10 +1,56 @@
 import { getHexNeighbors, getHexesInRange, hexDistance } from "../utils/hexMath.js";
 
 const SQRT_3 = Math.sqrt(3);
-const MAX_LAKE_SIZE = 10;
 const PROTECTED_LAND_RADIUS = 3;
 const PROTECTED_CORE_RADIUS = 2;
-const COAST_EXTENSION_PASSES = 2;
+const CITY_BORDER_RANGE = 1;
+const LAKES_WATER_TARGET_MIN = 0.1;
+const LAKES_WATER_TARGET_MAX = 0.22;
+
+const RESOURCE_DEFINITIONS = [
+  {
+    type: "wheat",
+    resourceSpriteKey: "Wheat",
+    improvementType: "farm",
+    improvementSpriteKey: "Farm+Wheat",
+    density: 0.013,
+    minCount: 7,
+    minSpacing: 3,
+    isValid: (tile) => (
+      !tile.isWater &&
+      tile.elevation === "flat" &&
+      (tile.biome === "plains" || tile.biome === "grassland")
+    ),
+  },
+  {
+    type: "iron",
+    resourceSpriteKey: "Iron",
+    improvementType: "mine",
+    improvementSpriteKey: "Mine",
+    density: 0.011,
+    minCount: 6,
+    minSpacing: 3,
+    isValid: (tile) => (
+      !tile.isWater &&
+      tile.elevation !== "mountain" &&
+      tile.biome !== "snow"
+    ),
+  },
+  {
+    type: "oil",
+    resourceSpriteKey: "Oil",
+    improvementType: "oilWell",
+    improvementSpriteKey: "Oil+Oil well",
+    density: 0.009,
+    minCount: 5,
+    minSpacing: 4,
+    isValid: (tile) => (
+      !tile.isWater &&
+      tile.elevation === "flat" &&
+      (tile.biome === "desert" || tile.biome === "plains" || tile.biome === "tundra")
+    ),
+  },
+];
 
 const BIOME_ASSET_KEYS = {
   grassland: "Grassland",
@@ -91,12 +137,16 @@ function createTerrainTile(col, row) {
     col,
     row,
     isWater: true,
-    waterType: "ocean",
+    waterType: "lakes",
     biome: "plains",
     elevation: "flat",
     feature: null,
-    baseAssetKey: "Ocean",
+    baseAssetKey: "Lakes",
     overlayAssetKey: null,
+    resourceType: null,
+    resourceSpriteKey: null,
+    improvementType: null,
+    improvementSpriteKey: null,
     temperature: 0,
     humidity: 0,
     elevationScore: 0,
@@ -113,6 +163,10 @@ function getTileAt(tiles, col, row, cols, rows) {
   }
 
   return tiles[getTileIndex(col, row, cols)];
+}
+
+function getTileKey(col, row) {
+  return `${col},${row}`;
 }
 
 function offsetToWorld(col, row) {
@@ -257,6 +311,34 @@ function getNeighborTiles(tile, tiles, cols, rows) {
     .filter(Boolean);
 }
 
+function resetResourceState(tile) {
+  tile.resourceType = null;
+  tile.resourceSpriteKey = null;
+  tile.improvementType = null;
+  tile.improvementSpriteKey = null;
+}
+
+function buildCityOwnership(cities, cols, rows) {
+  const ownerByTileKey = new Map();
+  const centerTileKeys = new Set();
+
+  for (const city of cities) {
+    centerTileKeys.add(getTileKey(city.centerCol, city.centerRow));
+
+    for (const hex of getHexesInRange(
+      city.centerCol,
+      city.centerRow,
+      CITY_BORDER_RANGE,
+      cols,
+      rows,
+    )) {
+      ownerByTileKey.set(getTileKey(hex.col, hex.row), city.owner ?? null);
+    }
+  }
+
+  return { ownerByTileKey, centerTileKeys };
+}
+
 function markProtectedZones(centers, cols, rows) {
   const landIndices = new Set();
   const coreIndices = new Set();
@@ -288,26 +370,28 @@ function markProtectedZones(centers, cols, rows) {
 }
 
 function applyLandmass(tiles, cols, rows, seeds, protectedIndices) {
-  let waterThreshold = 0.08;
+  let waterThreshold = 0;
 
-  for (let attempt = 0; attempt < 12; attempt += 1) {
+  for (let attempt = 0; attempt < 14; attempt += 1) {
     let waterCount = 0;
 
     for (const tile of tiles) {
-      const macroNoise = getTileNoise(tile, seeds.landMacroSeed, {
-        octaves: 4,
-        persistence: 0.78,
-        lacunarity: 1.8,
-        scale: Math.max(cols, rows) * 1.15,
-      });
-      const detailNoise = getTileNoise(tile, seeds.landDetailSeed, {
+      const macroRidgedNoise = getTileNoise(tile, seeds.landMacroSeed, {
         octaves: 6,
-        persistence: 0.58,
-        lacunarity: 2.05,
-        scale: Math.max(cols, rows) * 0.7,
+        persistence: 0.7,
+        lacunarity: 1.5,
+        scale: Math.max(cols, rows) * 0.38,
+        ridged: true,
       });
-      const landScore = macroNoise * 0.65 + detailNoise * 0.35 + getEdgeWaterTransform(tile, cols, rows);
-      tile.isWater = landScore < waterThreshold;
+      const detailRidgedNoise = getTileNoise(tile, seeds.landDetailSeed, {
+        octaves: 3,
+        persistence: 0.6,
+        lacunarity: 1.9,
+        scale: Math.max(cols, rows) * 0.2,
+        ridged: true,
+      });
+      const elevation = 0.3 - (macroRidgedNoise * 0.82 + detailRidgedNoise * 0.18);
+      tile.isWater = elevation < waterThreshold;
 
       if (protectedIndices.landIndices.has(getTileIndex(tile.col, tile.row, cols))) {
         tile.isWater = false;
@@ -319,11 +403,11 @@ function applyLandmass(tiles, cols, rows, seeds, protectedIndices) {
     }
 
     const waterPercent = waterCount / tiles.length;
-    if (waterPercent >= 0.4 && waterPercent <= 0.66) {
+    if (waterPercent >= LAKES_WATER_TARGET_MIN && waterPercent <= LAKES_WATER_TARGET_MAX) {
       break;
     }
 
-    if (waterPercent > 0.66) {
+    if (waterPercent > LAKES_WATER_TARGET_MAX) {
       waterThreshold -= 0.03;
     } else {
       waterThreshold += 0.02;
@@ -359,8 +443,8 @@ function applyClimate(tiles, cols, rows, seeds) {
     tile.temperature = temperature;
 
     if (tile.isWater) {
-      tile.waterType = "ocean";
-      tile.baseAssetKey = "Ocean";
+      tile.waterType = "lakes";
+      tile.baseAssetKey = "Lakes";
       continue;
     }
 
@@ -522,6 +606,7 @@ function normalizeProtectedStarts(tiles, protectedIndices) {
     tile.isWater = false;
     tile.waterType = null;
     tile.feature = null;
+    resetResourceState(tile);
 
     if (ring <= 1) {
       tile.biome = "grassland";
@@ -563,120 +648,138 @@ function ensureMountainPresence(tiles, cols, protectedIndices) {
   }
 }
 
-function classifyWaterTiles(tiles, cols, rows, rng) {
-  const visited = new Set();
-
+function classifyWaterTiles(tiles) {
   for (const tile of tiles) {
-    const index = getTileIndex(tile.col, tile.row, cols);
-    if (!tile.isWater || visited.has(index)) {
+    if (!tile.isWater) {
       continue;
     }
 
-    const cluster = [];
-    const queue = [tile];
-    let touchesEdge = false;
-    visited.add(index);
-
-    while (queue.length > 0) {
-      const current = queue.shift();
-      cluster.push(current);
-
-      if (
-        current.col === 0 ||
-        current.row === 0 ||
-        current.col === cols - 1 ||
-        current.row === rows - 1
-      ) {
-        touchesEdge = true;
-      }
-
-      for (const neighbor of getNeighborTiles(current, tiles, cols, rows)) {
-        if (!neighbor.isWater) {
-          continue;
-        }
-
-        const neighborIndex = getTileIndex(neighbor.col, neighbor.row, cols);
-        if (visited.has(neighborIndex)) {
-          continue;
-        }
-
-        visited.add(neighborIndex);
-        queue.push(neighbor);
-      }
-    }
-
-    const isLake = !touchesEdge && cluster.length <= MAX_LAKE_SIZE;
-    for (const waterTile of cluster) {
-      waterTile.waterType = isLake ? "lakes" : "ocean";
-      waterTile.baseAssetKey = isLake ? "Lakes" : "Ocean";
-      waterTile.overlayAssetKey = null;
-      waterTile.elevation = "flat";
-    }
-  }
-
-  for (let pass = 0; pass < COAST_EXTENSION_PASSES; pass += 1) {
-    const toCoast = [];
-
-    for (const tile of tiles) {
-      if (!tile.isWater || tile.waterType !== "ocean") {
-        continue;
-      }
-
-      const neighbors = getNeighborTiles(tile, tiles, cols, rows);
-      const adjacentLand = neighbors.some((neighbor) => !neighbor.isWater);
-      const adjacentCoast = neighbors.some((neighbor) => neighbor.waterType === "coast");
-
-      if (adjacentLand || (adjacentCoast && rng.chance(0.55))) {
-        toCoast.push(tile);
-      }
-    }
-
-    for (const coastTile of toCoast) {
-      coastTile.waterType = "coast";
-      coastTile.baseAssetKey = "Coast";
-    }
+    tile.waterType = "lakes";
+    tile.baseAssetKey = "Lakes";
+    tile.overlayAssetKey = null;
+    tile.elevation = "flat";
+    resetResourceState(tile);
   }
 }
 
-function spawnAtolls(tiles, cols, rows, seeds, protectedIndices) {
-  const candidates = [];
+function scoreResourceTile(tile, seed) {
+  return getTileNoise(tile, seed, {
+    octaves: 2,
+    persistence: 0.55,
+    lacunarity: 1.9,
+    scale: 9,
+  });
+}
+
+function canPlaceResource(tile, definition, placedResources) {
+  for (const placed of placedResources) {
+    const distance = hexDistance(tile.col, tile.row, placed.col, placed.row);
+    if (distance < 2) {
+      return false;
+    }
+
+    if (placed.resourceType === definition.type && distance < definition.minSpacing) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function placeResource(tile, definition, placedResources) {
+  tile.resourceType = definition.type;
+  tile.resourceSpriteKey = definition.resourceSpriteKey;
+  tile.improvementType = null;
+  tile.improvementSpriteKey = null;
+  placedResources.push({
+    col: tile.col,
+    row: tile.row,
+    resourceType: definition.type,
+  });
+}
+
+function spawnResources(tiles, cols, rows, seeds, cities, rng) {
+  const { ownerByTileKey, centerTileKeys } = buildCityOwnership(cities, cols, rows);
+  const placedResources = [];
 
   for (const tile of tiles) {
-    const index = getTileIndex(tile.col, tile.row, cols);
-    if (tile.waterType !== "coast" || protectedIndices.landIndices.has(index)) {
+    resetResourceState(tile);
+  }
+
+  const candidateLandTiles = tiles.filter((tile) => !tile.isWater && tile.elevation !== "mountain");
+  const passableLandCount = candidateLandTiles.length;
+
+  RESOURCE_DEFINITIONS.forEach((definition, index) => {
+    const candidateTiles = candidateLandTiles
+      .filter((tile) => !tile.resourceType)
+      .filter((tile) => !centerTileKeys.has(getTileKey(tile.col, tile.row)))
+      .filter((tile) => definition.isValid(tile))
+      .map((tile) => ({
+        tile,
+        score: scoreResourceTile(tile, seeds.resourceSeed + index * 173) + rng.nextFloat() * 0.08,
+      }))
+      .sort((a, b) => b.score - a.score);
+
+    const targetCount = Math.max(definition.minCount, Math.round(passableLandCount * definition.density));
+
+    for (const candidate of candidateTiles) {
+      if (placedResources.filter((entry) => entry.resourceType === definition.type).length >= targetCount) {
+        break;
+      }
+
+      if (!canPlaceResource(candidate.tile, definition, placedResources)) {
+        continue;
+      }
+
+      placeResource(candidate.tile, definition, placedResources);
+    }
+  });
+
+  for (const city of cities) {
+    const borderTiles = getHexesInRange(city.centerCol, city.centerRow, CITY_BORDER_RANGE, cols, rows)
+      .filter((hex) => hex.col !== city.centerCol || hex.row !== city.centerRow)
+      .map((hex) => getTileAt(tiles, hex.col, hex.row, cols, rows))
+      .filter(Boolean)
+      .filter((tile) => !tile.isWater && tile.elevation !== "mountain");
+
+    if (borderTiles.some((tile) => tile.resourceType)) {
       continue;
     }
 
-    const neighbors = getNeighborTiles(tile, tiles, cols, rows);
-    const adjacentLandCount = neighbors.filter((neighbor) => !neighbor.isWater).length;
-    const adjacentAtoll = neighbors.some((neighbor) => neighbor.feature === "atoll");
+    const possiblePlacements = borderTiles.flatMap((tile, tileIndex) => RESOURCE_DEFINITIONS
+      .filter((definition) => definition.isValid(tile) && canPlaceResource(tile, definition, placedResources))
+      .map((definition, definitionIndex) => ({
+        tile,
+        definition,
+        score: scoreResourceTile(tile, seeds.resourceSeed + tileIndex * 31 + definitionIndex * 97) + rng.nextFloat() * 0.1,
+      })))
+      .sort((a, b) => b.score - a.score);
 
-    if (adjacentLandCount > 2 || adjacentAtoll || tile.temperature <= 0.25) {
+    if (possiblePlacements.length === 0) {
       continue;
     }
 
-    const atollNoise = getTileNoise(tile, seeds.featureSeed, {
-      octaves: 1,
-      persistence: 0.5,
-      lacunarity: 2,
-      scale: 7,
-    });
+    placeResource(possiblePlacements[0].tile, possiblePlacements[0].definition, placedResources);
+  }
 
-    candidates.push({ tile, atollNoise });
-
-    if (atollNoise > 0.62) {
-      tile.feature = "atoll";
-      tile.overlayAssetKey = "Atoll";
+  for (const tile of tiles) {
+    if (!tile.resourceType) {
+      continue;
     }
-  }
 
-  if (tiles.some((tile) => tile.feature === "atoll") || candidates.length === 0) {
-    return;
-  }
+    const owner = ownerByTileKey.get(getTileKey(tile.col, tile.row));
+    if (!owner) {
+      continue;
+    }
 
-  candidates.sort((a, b) => b.atollNoise - a.atollNoise);
-  candidates[0].tile.feature = "atoll";
-  candidates[0].tile.overlayAssetKey = "Atoll";
+    const definition = RESOURCE_DEFINITIONS.find((entry) => entry.type === tile.resourceType);
+    if (!definition) {
+      continue;
+    }
+
+    tile.improvementType = definition.improvementType;
+    tile.improvementSpriteKey = definition.improvementSpriteKey;
+  }
 }
 
 function serializeTerrain(tiles) {
@@ -691,6 +794,10 @@ function serializeTerrain(tiles) {
     isWater: tile.isWater,
     baseAssetKey: tile.baseAssetKey,
     overlayAssetKey: tile.overlayAssetKey,
+    resourceType: tile.resourceType,
+    resourceSpriteKey: tile.resourceSpriteKey,
+    improvementType: tile.improvementType,
+    improvementSpriteKey: tile.improvementSpriteKey,
   }));
 }
 
@@ -718,6 +825,7 @@ export function generateHexTerrain({
     temperatureSeed: rng.nextFloat() * 10000,
     elevationSeed: rng.nextFloat() * 10000,
     featureSeed: rng.nextFloat() * 10000,
+    resourceSeed: rng.nextFloat() * 10000,
   };
 
   applyLandmass(tiles, cols, rows, seeds, protectedIndices);
@@ -725,8 +833,8 @@ export function generateHexTerrain({
   applyElevation(tiles, cols, rows, seeds, protectedIndices);
   normalizeProtectedStarts(tiles, protectedIndices);
   ensureMountainPresence(tiles, cols, protectedIndices);
-  classifyWaterTiles(tiles, cols, rows, rng);
-  spawnAtolls(tiles, cols, rows, seeds, protectedIndices);
+  classifyWaterTiles(tiles);
+  spawnResources(tiles, cols, rows, seeds, protectedCenters, rng);
 
   return serializeTerrain(tiles);
 }

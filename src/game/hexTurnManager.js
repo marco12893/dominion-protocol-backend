@@ -6,7 +6,7 @@
  * until the turn resolves.
  */
 
-import { hexDistance } from "../utils/hexMath.js";
+import { getTraversableHexesInRange } from "../utils/hexMath.js";
 import {
   HEX_CITIES,
   HEX_GRID_COLS,
@@ -30,6 +30,16 @@ function createTerrainSnapshot(seed = Date.now()) {
   };
 }
 
+function getHexKey(col, row) {
+  return `${col},${row}`;
+}
+
+function buildTerrainLookup(terrainTiles) {
+  return new Map(
+    terrainTiles.map((tile) => [getHexKey(tile.col, tile.row), tile]),
+  );
+}
+
 export function createHexTurnManager() {
   let hexUnits = INITIAL_HEX_UNITS.map((unit) => ({ ...unit }));
   const pendingMoves = new Map();
@@ -37,11 +47,13 @@ export function createHexTurnManager() {
   let turnNumber = 1;
   let isResolving = false;
   let { terrainSeed, terrainTiles } = createTerrainSnapshot();
+  let terrainLookup = buildTerrainLookup(terrainTiles);
 
   function getState() {
     return {
       terrainSeed,
       terrainTiles,
+      cities: HEX_CITIES.map((city) => ({ ...city })),
       hexUnits: hexUnits.map((unit) => ({ ...unit })),
       turnNumber,
       readyPlayers: [...readyPlayers],
@@ -60,6 +72,7 @@ export function createHexTurnManager() {
     return {
       terrainSeed,
       terrainTiles,
+      cities: HEX_CITIES.map((city) => ({ ...city })),
       hexUnits: hexUnits.map((unit) => ({ ...unit })),
       turnNumber,
       readyPlayers: [...readyPlayers],
@@ -90,20 +103,40 @@ export function createHexTurnManager() {
       return { success: false, error: "Out of bounds" };
     }
 
-    const distance = hexDistance(unit.col, unit.row, toCol, toRow);
-    if (distance > HEX_MOVEMENT_RANGE || distance === 0) {
+    if (toCol === unit.col && toRow === unit.row) {
       return { success: false, error: "Out of range" };
     }
 
-    const occupied = hexUnits.some((entry) => entry.col === toCol && entry.row === toRow);
-    if (occupied) {
-      return { success: false, error: "Hex occupied by unit" };
-    }
+    const occupiedHexKeys = new Set(
+      hexUnits
+        .filter((entry) => entry.id !== unitId)
+        .map((entry) => getHexKey(entry.col, entry.row)),
+    );
+    const blockedPendingTargets = new Set(
+      [...pendingMoves.entries()]
+        .filter(([pendingUnitId, move]) => pendingUnitId !== unitId && move.owner === playerColor)
+        .map(([, move]) => getHexKey(move.toCol, move.toRow)),
+    );
 
-    for (const [, move] of pendingMoves) {
-      if (move.owner === playerColor && move.toCol === toCol && move.toRow === toRow) {
-        return { success: false, error: "Hex targeted by another pending move" };
-      }
+    const reachableHexes = getTraversableHexesInRange(
+      unit.col,
+      unit.row,
+      HEX_MOVEMENT_RANGE,
+      HEX_GRID_COLS,
+      HEX_GRID_ROWS,
+      (col, row) => {
+        const terrainTile = terrainLookup.get(getHexKey(col, row));
+        if (!terrainTile || terrainTile.isWater) {
+          return false;
+        }
+
+        const key = getHexKey(col, row);
+        return !occupiedHexKeys.has(key) && !blockedPendingTargets.has(key);
+      },
+    );
+
+    if (!reachableHexes.some((hex) => hex.col === toCol && hex.row === toRow)) {
+      return { success: false, error: "Hex is blocked or impassable" };
     }
 
     pendingMoves.set(unitId, { toCol, toRow, owner: playerColor });
@@ -194,6 +227,7 @@ export function createHexTurnManager() {
     isResolving = false;
 
     ({ terrainSeed, terrainTiles } = createTerrainSnapshot());
+    terrainLookup = buildTerrainLookup(terrainTiles);
   }
 
   return {

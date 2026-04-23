@@ -82,3 +82,44 @@ export function getHexesInRange(centerCol, centerRow, range, gridCols, gridRows)
 
   return results;
 }
+
+export function getTraversableHexesInRange(
+  centerCol,
+  centerRow,
+  range,
+  gridCols,
+  gridRows,
+  isPassable,
+) {
+  const visited = new Set([`${centerCol},${centerRow}`]);
+  const frontier = [{ col: centerCol, row: centerRow, distance: 0 }];
+  const results = [];
+
+  while (frontier.length > 0) {
+    const current = frontier.shift();
+    if (current.distance >= range) {
+      continue;
+    }
+
+    for (const neighbor of getHexNeighbors(current.col, current.row, gridCols, gridRows)) {
+      const key = `${neighbor.col},${neighbor.row}`;
+      if (visited.has(key)) {
+        continue;
+      }
+
+      if (typeof isPassable === "function" && !isPassable(neighbor.col, neighbor.row, current.distance + 1)) {
+        continue;
+      }
+
+      visited.add(key);
+      results.push(neighbor);
+      frontier.push({
+        col: neighbor.col,
+        row: neighbor.row,
+        distance: current.distance + 1,
+      });
+    }
+  }
+
+  return results;
+}
