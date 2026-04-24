@@ -14,6 +14,11 @@ import {
   INITIAL_HEX_UNITS,
 } from "./hexConfig.js";
 import {
+  HEX_URBAN_AREA_UPGRADE_COSTS,
+  getNextUrbanAreaTier,
+  normalizeUrbanAreaTier,
+} from "./hexUrbanAreas.js";
+import {
   HEX_UNIT_PRODUCTION_CATALOG,
   addResourceIncome,
   buildHexCityOwnershipMap,
@@ -27,7 +32,10 @@ import {
   getUnitBuildCost,
   multiplyResourceCost,
 } from "./hexEconomy.js";
-import { generateHexTerrain } from "../world/terrainGeneration.js";
+import {
+  applyUrbanImprovementsToTerrain,
+  generateHexTerrain,
+} from "../world/terrainGeneration.js";
 import {
   HEX_ARMY_MAX_SLOTS,
   addUnitsToArmy,
@@ -35,9 +43,11 @@ import {
   getMaxAddableUnits,
   normalizeHexArmy,
 } from "./hexArmies.js";
-import { LAYER_3_BATTLE_DURATION_SECONDS } from "./layer3BattleConstants.js";
+import {
+  LAYER_3_BATTLE_DURATION_SECONDS,
+} from "./layer3BattleConstants.js";
 
-function createTerrainSnapshot(seed = Date.now()) {
+function createTerrainSnapshot(seed = Date.now(), protectedCenters = HEX_CITIES) {
   const terrainSeed = (Number(seed) >>> 0) || 1;
 
   return {
@@ -46,7 +56,7 @@ function createTerrainSnapshot(seed = Date.now()) {
       cols: HEX_GRID_COLS,
       rows: HEX_GRID_ROWS,
       seed: terrainSeed,
-      protectedCenters: HEX_CITIES,
+      protectedCenters,
     }),
   };
 }
@@ -65,8 +75,22 @@ function createInitialHexUnits() {
   return INITIAL_HEX_UNITS.map((unit) => normalizeHexArmy(unit));
 }
 
+function createInitialCities() {
+  return HEX_CITIES.map((city) => ({
+    ...city,
+    tier: normalizeUrbanAreaTier(city.tier),
+  }));
+}
+
 function cloneHexUnits(units) {
   return units.map((unit) => cloneHexArmy(unit));
+}
+
+function cloneCities(cities) {
+  return cities.map((city) => ({
+    ...city,
+    tier: normalizeUrbanAreaTier(city.tier),
+  }));
 }
 
 function createPlayerColors() {
@@ -96,7 +120,10 @@ function cloneBattleArmySummary(army) {
 }
 
 function createLayer3BattleState(nextState = {}) {
-  const normalizedStatus = nextState.status === "active" ? "active" : "idle";
+  const normalizedStatus = nextState.status === "countdown" || nextState.status === "active"
+    ? nextState.status
+    : "idle";
+  const countdownEndsAtTick = Number(nextState.countdownEndsAtTick);
   const startedAtTick = Number(nextState.startedAtTick);
   const endsAtTick = Number(nextState.endsAtTick);
   const queueLength = Math.max(0, Math.floor(Number(nextState.queueLength) || 0));
@@ -111,6 +138,7 @@ function createLayer3BattleState(nextState = {}) {
     queueLength,
     hex,
     maxDurationSeconds: LAYER_3_BATTLE_DURATION_SECONDS,
+    countdownEndsAtTick: Number.isFinite(countdownEndsAtTick) ? countdownEndsAtTick : null,
     startedAtTick: Number.isFinite(startedAtTick) ? startedAtTick : null,
     endsAtTick: Number.isFinite(endsAtTick) ? endsAtTick : null,
     blueArmy: cloneBattleArmySummary(nextState.blueArmy),
@@ -177,6 +205,7 @@ function buildSurvivorSlots(originalArmy, survivorCounts) {
 
 export function createHexTurnManager() {
   const playerColors = createPlayerColors();
+  let cities = createInitialCities();
   let hexUnits = createInitialHexUnits();
   const pendingMoves = new Map();
   const readyPlayers = new Set();
@@ -184,20 +213,21 @@ export function createHexTurnManager() {
   let isResolving = false;
   let nextBuiltUnitSequence = 1;
   let nextBattleSequence = 1;
-  let { terrainSeed, terrainTiles } = createTerrainSnapshot();
+  let { terrainSeed, terrainTiles } = createTerrainSnapshot(Date.now(), cities);
   let terrainLookup = buildTerrainLookup(terrainTiles);
-  let cityOwnership = buildHexCityOwnershipMap(HEX_CITIES, HEX_GRID_COLS, HEX_GRID_ROWS);
+  let cityOwnership = buildHexCityOwnershipMap(cities, HEX_GRID_COLS, HEX_GRID_ROWS);
   let resourceIncome = createInitialResourceLedger(playerColors);
   let resourceStockpiles = createInitialResourceLedger(playerColors);
   let layer3Battle = createLayer3BattleState();
 
-  function initializeEconomy() {
-    cityOwnership = buildHexCityOwnershipMap(HEX_CITIES, HEX_GRID_COLS, HEX_GRID_ROWS);
+  function initializeEconomy(resetStockpiles = true) {
+    cityOwnership = buildHexCityOwnershipMap(cities, HEX_GRID_COLS, HEX_GRID_ROWS);
+    applyUrbanImprovementsToTerrain(terrainTiles, cities, HEX_GRID_COLS, HEX_GRID_ROWS);
 
     resourceIncome = createInitialResourceLedger(playerColors);
     const calculatedIncome = computePlayerResourceIncome({
       terrainTiles,
-      cities: HEX_CITIES,
+      cities,
       cols: HEX_GRID_COLS,
       rows: HEX_GRID_ROWS,
     });
@@ -208,14 +238,16 @@ export function createHexTurnManager() {
       );
     }
 
-    resourceStockpiles = createInitialResourceLedger(playerColors);
+    if (resetStockpiles) {
+      resourceStockpiles = createInitialResourceLedger(playerColors);
+    }
   }
 
   function buildBaseState() {
     return {
       terrainSeed,
       terrainTiles,
-      cities: HEX_CITIES.map((city) => ({ ...city })),
+      cities: cloneCities(cities),
       hexUnits: cloneHexUnits(hexUnits),
       turnNumber,
       readyPlayers: [...readyPlayers],
@@ -256,7 +288,7 @@ export function createHexTurnManager() {
   }
 
   function createBattleLockError() {
-    return { success: false, error: "Layer 3 battle is active" };
+    return { success: false, error: "Layer 3 engagement is active" };
   }
 
   function submitMove(playerColor, unitId, toCol, toRow) {
@@ -355,10 +387,6 @@ export function createHexTurnManager() {
     return hexUnits.filter((unit) => unit.col === col && unit.row === row);
   }
 
-  function getHexArmyAt(col, row) {
-    return hexUnits.find((unit) => unit.col === col && unit.row === row) ?? null;
-  }
-
   function hasPendingMoveTo(col, row, ignoredUnitId = null) {
     for (const [unitId, move] of pendingMoves) {
       if (unitId === ignoredUnitId) {
@@ -371,6 +399,88 @@ export function createHexTurnManager() {
     }
 
     return false;
+  }
+
+  function captureCitiesFromOccupants() {
+    const capturedCities = [];
+
+    for (const city of cities) {
+      const occupyingArmy = getHexArmiesAt(city.centerCol, city.centerRow)
+        .find((army) => army.owner && army.owner !== city.owner) ?? null;
+      if (!occupyingArmy || !occupyingArmy.owner || occupyingArmy.owner === city.owner) {
+        continue;
+      }
+
+      capturedCities.push({
+        cityId: city.id,
+        centerCol: city.centerCol,
+        centerRow: city.centerRow,
+        previousOwner: city.owner ?? null,
+        nextOwner: occupyingArmy.owner,
+        tier: city.tier,
+      });
+      city.owner = occupyingArmy.owner;
+    }
+
+    if (capturedCities.length > 0) {
+      initializeEconomy(false);
+    }
+
+    return capturedCities;
+  }
+
+  function upgradeCity(playerColor, cityId) {
+    if (isResolving) {
+      return { success: false, error: "Turn is resolving" };
+    }
+
+    if (isLayer3BattleLocked()) {
+      return createBattleLockError();
+    }
+
+    if (readyPlayers.has(playerColor)) {
+      return { success: false, error: "Already marked ready" };
+    }
+
+    const city = cityOwnership.cityById.get(cityId);
+    if (!city) {
+      return { success: false, error: "Urban area not found" };
+    }
+
+    if (city.owner !== playerColor) {
+      return { success: false, error: "You can only upgrade your own urban area" };
+    }
+
+    const nextTier = getNextUrbanAreaTier(city.tier);
+    if (!nextTier) {
+      return { success: false, error: "This urban area is already a metropolis" };
+    }
+
+    const cityCenterArmies = getHexArmiesAt(city.centerCol, city.centerRow);
+    const cityCenterHasHostileOccupant = cityCenterArmies.some((army) => army.owner !== playerColor);
+    if (cityCenterHasHostileOccupant) {
+      return { success: false, error: "Urban area center is occupied by hostile forces" };
+    }
+
+    const upgradeCost = HEX_URBAN_AREA_UPGRADE_COSTS[normalizeUrbanAreaTier(city.tier)] ?? {};
+    const playerStockpile = resourceStockpiles[playerColor] ?? createEmptyResourceStockpile();
+    if (!canAffordCost(playerStockpile, upgradeCost)) {
+      return { success: false, error: "Insufficient resources" };
+    }
+
+    city.tier = nextTier;
+    resourceStockpiles = {
+      ...resourceStockpiles,
+      [playerColor]: deductResourceCost(playerStockpile, upgradeCost),
+    };
+    initializeEconomy(false);
+
+    return {
+      success: true,
+      city: { ...city },
+      resourceStockpiles: cloneResourceLedger(resourceStockpiles),
+      resourceIncome: cloneResourceLedger(resourceIncome),
+    };
   }
 
   function buildUnit(playerColor, cityId, variantId, quantity = 1) {
@@ -388,11 +498,11 @@ export function createHexTurnManager() {
 
     const city = cityOwnership.cityById.get(cityId);
     if (!city) {
-      return { success: false, error: "City not found" };
+      return { success: false, error: "Urban area not found" };
     }
 
     if (city.owner !== playerColor) {
-      return { success: false, error: "You can only build in your own city" };
+      return { success: false, error: "You can only build in your own urban area" };
     }
 
     if (!HEX_UNIT_PRODUCTION_CATALOG[variantId]) {
@@ -409,11 +519,11 @@ export function createHexTurnManager() {
     const cityCenterHasHostileOccupant = cityCenterArmies.some((army) => army.owner !== playerColor);
 
     if (cityCenterHasHostileOccupant) {
-      return { success: false, error: "City center is occupied by hostile forces" };
+      return { success: false, error: "Urban area center is occupied by hostile forces" };
     }
 
     if (!cityCenterArmy && hasPendingMoveTo(city.centerCol, city.centerRow)) {
-      return { success: false, error: "City center is reserved for movement this turn" };
+      return { success: false, error: "Urban area center is reserved for movement this turn" };
     }
 
     const targetArmy = cityCenterArmy ?? normalizeHexArmy({
@@ -473,7 +583,7 @@ export function createHexTurnManager() {
     }
 
     if (isLayer3BattleLocked()) {
-      return { success: false, allReady: false, error: "Layer 3 battle is active" };
+      return { success: false, allReady: false, error: "Layer 3 engagement is active" };
     }
 
     readyPlayers.add(playerColor);
@@ -488,7 +598,7 @@ export function createHexTurnManager() {
     }
 
     if (isLayer3BattleLocked()) {
-      return { success: false, error: "Layer 3 battle is active" };
+      return { success: false, error: "Layer 3 engagement is active" };
     }
 
     if (!readyPlayers.has(playerColor)) {
@@ -632,6 +742,8 @@ export function createHexTurnManager() {
       unit.row = move.toRow;
     }
 
+    const capturedCities = captureCitiesFromOccupants();
+
     for (const playerColor of playerColors) {
       resourceStockpiles[playerColor] = addResourceIncome(
         resourceStockpiles[playerColor],
@@ -649,8 +761,10 @@ export function createHexTurnManager() {
 
     return {
       hexUnits: cloneHexUnits(hexUnits),
+      cities: cloneCities(cities),
       turnNumber,
       appliedMoves,
+      capturedCities,
       engagements,
       layer3Battle: createLayer3BattleState(layer3Battle),
       resourceStockpiles: cloneResourceLedger(resourceStockpiles),
@@ -659,6 +773,7 @@ export function createHexTurnManager() {
   }
 
   function reset() {
+    cities = createInitialCities();
     hexUnits = createInitialHexUnits();
     pendingMoves.clear();
     readyPlayers.clear();
@@ -668,12 +783,12 @@ export function createHexTurnManager() {
     nextBattleSequence = 1;
     layer3Battle = createLayer3BattleState();
 
-    ({ terrainSeed, terrainTiles } = createTerrainSnapshot());
+    ({ terrainSeed, terrainTiles } = createTerrainSnapshot(Date.now(), cities));
     terrainLookup = buildTerrainLookup(terrainTiles);
-    initializeEconomy();
+    initializeEconomy(true);
   }
 
-  initializeEconomy();
+  initializeEconomy(true);
 
   return {
     buildUnit,
@@ -687,5 +802,6 @@ export function createHexTurnManager() {
     setPlayerReady,
     setPlayerUnready,
     submitMove,
+    upgradeCity,
   };
 }

@@ -275,7 +275,23 @@ export function registerSocketHandlers({
         return;
       }
 
-        emitHexStateUpdates(io, world);
+      emitHexStateUpdates(io, world);
+    });
+
+    socket.on("hex:upgradeCity", ({ cityId }) => {
+      const color = playerAssignments.get(socket.id);
+      if (!color) return;
+
+      const result = hexManager.upgradeCity(color, cityId);
+      if (!result.success) {
+        socket.emit("hex:upgradeRejected", {
+          cityId,
+          error: result.error,
+        });
+        return;
+      }
+
+      emitHexStateUpdates(io, world);
     });
 
     socket.on("hex:endTurn", () => {

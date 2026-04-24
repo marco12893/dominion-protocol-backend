@@ -1,4 +1,8 @@
-import { getHexesInRange } from "../utils/hexMath.js";
+import {
+  HEX_URBAN_AREA_BASE_RESOURCE_YIELDS,
+  buildUrbanAreaOwnershipMap,
+  normalizeUrbanAreaTier,
+} from "./hexUrbanAreas.js";
 
 export const HEX_RESOURCE_ORDER = ["gold", "oil", "iron", "wheat"];
 
@@ -10,7 +14,6 @@ export const INITIAL_HEX_PLAYER_STOCKPILE = Object.freeze({
 });
 
 export const HEX_RESOURCE_YIELDS = Object.freeze({
-  city: Object.freeze({ gold: 4 }),
   farm: Object.freeze({ wheat: 2 }),
   mine: Object.freeze({ iron: 2 }),
   oilWell: Object.freeze({ oil: 2 }),
@@ -54,10 +57,6 @@ export const HEX_UNIT_PRODUCTION_CATALOG = Object.freeze({
     slotCapacity: 6,
   }),
 });
-
-function getHexKey(col, row) {
-  return `${col},${row}`;
-}
 
 export function createEmptyResourceStockpile() {
   return {
@@ -161,29 +160,7 @@ export function addResourceIncome(stockpile, income) {
 }
 
 export function buildHexCityOwnershipMap(cities, cols, rows) {
-  const ownerByTileKey = new Map();
-  const cityById = new Map();
-  const cityCenterKeySet = new Set();
-  const cityTileMap = new Map();
-
-  for (const city of cities) {
-    cityById.set(city.id, city);
-    cityCenterKeySet.add(getHexKey(city.centerCol, city.centerRow));
-
-    const cityHexes = getHexesInRange(city.centerCol, city.centerRow, 1, cols, rows);
-    cityTileMap.set(city.id, cityHexes);
-
-    for (const hex of cityHexes) {
-      ownerByTileKey.set(getHexKey(hex.col, hex.row), city.owner ?? null);
-    }
-  }
-
-  return {
-    cityById,
-    cityCenterKeySet,
-    cityTileMap,
-    ownerByTileKey,
-  };
+  return buildUrbanAreaOwnershipMap(cities, cols, rows);
 }
 
 export function computePlayerResourceIncome({
@@ -205,13 +182,16 @@ export function computePlayerResourceIncome({
       incomeByPlayer[owner] = createEmptyResourceStockpile();
     }
 
-    for (const [resourceType, amount] of Object.entries(HEX_RESOURCE_YIELDS.city)) {
+    const tierYield =
+      HEX_URBAN_AREA_BASE_RESOURCE_YIELDS[normalizeUrbanAreaTier(city.tier)];
+
+    for (const [resourceType, amount] of Object.entries(tierYield)) {
       incomeByPlayer[owner][resourceType] += amount;
     }
   }
 
   for (const tile of terrainTiles) {
-    const owner = ownership.ownerByTileKey.get(getHexKey(tile.col, tile.row));
+    const owner = ownership.ownerByTileKey.get(`${tile.col},${tile.row}`);
     if (!owner || !tile.improvementType || !HEX_RESOURCE_YIELDS[tile.improvementType]) {
       continue;
     }

@@ -3,8 +3,8 @@ export const HEX_GRID_ROWS = 30;
 export const HEX_MOVEMENT_RANGE = 2;
 
 export const HEX_CITIES = [
-  { id: "city-blue", name: "Azure Crown", centerCol: 6, centerRow: 6, owner: "blue" },
-  { id: "city-red", name: "Crimson Forge", centerCol: 33, centerRow: 22, owner: "red" },
+  { id: "city-blue", name: "Azure Crown", centerCol: 6, centerRow: 6, owner: "blue", tier: "town" },
+  { id: "city-red", name: "Crimson Forge", centerCol: 33, centerRow: 22, owner: "red", tier: "town" },
 ];
 
 export const INITIAL_HEX_UNITS = [

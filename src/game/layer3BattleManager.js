@@ -1,18 +1,18 @@
 import { MAP_HEIGHT, MAP_WIDTH, TICK_RATE } from "../config/gameConstants.js";
-import { LAYER_3_BATTLE_DURATION_SECONDS } from "./layer3BattleConstants.js";
+import {
+  LAYER_3_BATTLE_DURATION_SECONDS,
+  LAYER_3_BATTLE_PREPARATION_SECONDS,
+} from "./layer3BattleConstants.js";
 
 const BATTLE_DURATION_TICKS = LAYER_3_BATTLE_DURATION_SECONDS * TICK_RATE;
-const BATTLE_CENTER = Object.freeze({
-  x: MAP_WIDTH / 2,
-  y: MAP_HEIGHT / 2,
-});
+const BATTLE_PREPARATION_TICKS = LAYER_3_BATTLE_PREPARATION_SECONDS * TICK_RATE;
 const BLUE_SPAWN_CENTER = Object.freeze({
-  x: 680,
-  y: MAP_HEIGHT / 2,
+  x: 420,
+  y: 420,
 });
 const RED_SPAWN_CENTER = Object.freeze({
-  x: MAP_WIDTH - 680,
-  y: MAP_HEIGHT / 2,
+  x: MAP_WIDTH - 420,
+  y: MAP_HEIGHT - 420,
 });
 
 function cloneArmySlots(slots = []) {
@@ -46,6 +46,7 @@ function createIdleBattleState() {
     queueLength: 0,
     hex: null,
     maxDurationSeconds: LAYER_3_BATTLE_DURATION_SECONDS,
+    countdownEndsAtTick: null,
     startedAtTick: null,
     endsAtTick: null,
     blueArmy: null,
@@ -107,11 +108,12 @@ export function createLayer3BattleManager({
   function syncBattleState() {
     const nextState = activeBattle
       ? {
-        status: "active",
+        status: activeBattle.status,
         battleId: activeBattle.battleId,
         queueLength: queuedBattles.length,
         hex: { ...activeBattle.hex },
         maxDurationSeconds: LAYER_3_BATTLE_DURATION_SECONDS,
+        countdownEndsAtTick: activeBattle.countdownEndsAtTick ?? null,
         startedAtTick: activeBattle.startedAtTick,
         endsAtTick: activeBattle.endsAtTick,
         blueArmy: cloneBattleArmySummary(activeBattle.blueArmy),
@@ -142,7 +144,7 @@ export function createLayer3BattleManager({
       );
       unit.sourceBattleId = battle.battleId;
       unit.sourceArmyId = battle.blueArmy.id;
-      executeOrder(unit, { type: "attackMove", position: BATTLE_CENTER });
+      executeOrder(unit, { type: "holdPosition" });
       units.push(unit);
     }
 
@@ -156,7 +158,7 @@ export function createLayer3BattleManager({
       );
       unit.sourceBattleId = battle.battleId;
       unit.sourceArmyId = battle.redArmy.id;
-      executeOrder(unit, { type: "attackMove", position: BATTLE_CENTER });
+      executeOrder(unit, { type: "holdPosition" });
       units.push(unit);
     }
 
@@ -171,8 +173,10 @@ export function createLayer3BattleManager({
     const nextBattle = queuedBattles.shift();
     activeBattle = {
       ...nextBattle,
-      startedAtTick: world.currentTick,
-      endsAtTick: world.currentTick + BATTLE_DURATION_TICKS,
+      status: "countdown",
+      countdownEndsAtTick: world.currentTick + BATTLE_PREPARATION_TICKS,
+      startedAtTick: null,
+      endsAtTick: null,
     };
 
     worldState.units = createBattleUnits(activeBattle);
@@ -235,6 +239,23 @@ export function createLayer3BattleManager({
   function tick() {
     if (!activeBattle) {
       return false;
+    }
+
+    if (activeBattle.status === "countdown") {
+      if (world.currentTick < activeBattle.countdownEndsAtTick) {
+        return false;
+      }
+
+      activeBattle = {
+        ...activeBattle,
+        status: "active",
+        startedAtTick: world.currentTick,
+        endsAtTick: world.currentTick + BATTLE_DURATION_TICKS,
+      };
+      syncBattleState();
+      markWorldDirty();
+      emitHexStateUpdates?.();
+      return true;
     }
 
     const blueAlive = worldState.units.some((unit) => unit.owner === "blue" && unit.health > 0);

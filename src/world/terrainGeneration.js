@@ -1,9 +1,12 @@
 import { getHexNeighbors, getHexesInRange, hexDistance } from "../utils/hexMath.js";
+import {
+  buildUrbanAreaOwnershipMap,
+  getUrbanAreaRange,
+} from "../game/hexUrbanAreas.js";
 
 const SQRT_3 = Math.sqrt(3);
 const PROTECTED_LAND_RADIUS = 3;
 const PROTECTED_CORE_RADIUS = 2;
-const CITY_BORDER_RANGE = 1;
 const LAKES_WATER_TARGET_MIN = 0.1;
 const LAKES_WATER_TARGET_MAX = 0.22;
 
@@ -323,25 +326,28 @@ function resetResourceState(tile) {
   tile.improvementSpriteKey = null;
 }
 
-function buildCityOwnership(cities, cols, rows) {
-  const ownerByTileKey = new Map();
-  const centerTileKeys = new Set();
+function getResourceDefinition(resourceType) {
+  return RESOURCE_DEFINITIONS.find((entry) => entry.type === resourceType) ?? null;
+}
 
-  for (const city of cities) {
-    centerTileKeys.add(getTileKey(city.centerCol, city.centerRow));
+export function applyUrbanImprovementsToTerrain(terrainTiles, cities, cols, rows) {
+  const { ownerByTileKey } = buildUrbanAreaOwnershipMap(cities, cols, rows);
 
-    for (const hex of getHexesInRange(
-      city.centerCol,
-      city.centerRow,
-      CITY_BORDER_RANGE,
-      cols,
-      rows,
-    )) {
-      ownerByTileKey.set(getTileKey(hex.col, hex.row), city.owner ?? null);
+  for (const tile of terrainTiles) {
+    const definition = getResourceDefinition(tile.resourceType);
+    const owner = ownerByTileKey.get(getTileKey(tile.col, tile.row));
+
+    if (!definition || !owner) {
+      tile.improvementType = null;
+      tile.improvementSpriteKey = null;
+      continue;
     }
+
+    tile.improvementType = definition.improvementType;
+    tile.improvementSpriteKey = definition.improvementSpriteKey;
   }
 
-  return { ownerByTileKey, centerTileKeys };
+  return terrainTiles;
 }
 
 function markProtectedZones(centers, cols, rows) {
@@ -711,7 +717,7 @@ function placeResource(tile, definition, placedResources) {
 }
 
 function spawnResources(tiles, cols, rows, seeds, cities, rng) {
-  const { ownerByTileKey, centerTileKeys } = buildCityOwnership(cities, cols, rows);
+  const { cityCenterKeySet } = buildUrbanAreaOwnershipMap(cities, cols, rows);
   const placedResources = [];
 
   for (const tile of tiles) {
@@ -722,10 +728,10 @@ function spawnResources(tiles, cols, rows, seeds, cities, rng) {
   const passableLandCount = candidateLandTiles.length;
 
   RESOURCE_DEFINITIONS.forEach((definition, index) => {
-    const candidateTiles = candidateLandTiles
-      .filter((tile) => !tile.resourceType)
-      .filter((tile) => !centerTileKeys.has(getTileKey(tile.col, tile.row)))
-      .filter((tile) => definition.isValid(tile))
+      const candidateTiles = candidateLandTiles
+        .filter((tile) => !tile.resourceType)
+        .filter((tile) => !cityCenterKeySet.has(getTileKey(tile.col, tile.row)))
+        .filter((tile) => definition.isValid(tile))
       .map((tile) => ({
         tile,
         score: scoreResourceTile(tile, seeds.resourceSeed + index * 173) + rng.nextFloat() * 0.08,
@@ -748,7 +754,13 @@ function spawnResources(tiles, cols, rows, seeds, cities, rng) {
   });
 
   for (const city of cities) {
-    const borderTiles = getHexesInRange(city.centerCol, city.centerRow, CITY_BORDER_RANGE, cols, rows)
+    const borderTiles = getHexesInRange(
+      city.centerCol,
+      city.centerRow,
+      getUrbanAreaRange(city),
+      cols,
+      rows,
+    )
       .filter((hex) => hex.col !== city.centerCol || hex.row !== city.centerRow)
       .map((hex) => getTileAt(tiles, hex.col, hex.row, cols, rows))
       .filter(Boolean)
@@ -786,24 +798,7 @@ function spawnResources(tiles, cols, rows, seeds, cities, rng) {
     }
   }
 
-  for (const tile of tiles) {
-    if (!tile.resourceType) {
-      continue;
-    }
-
-    const owner = ownerByTileKey.get(getTileKey(tile.col, tile.row));
-    if (!owner) {
-      continue;
-    }
-
-    const definition = RESOURCE_DEFINITIONS.find((entry) => entry.type === tile.resourceType);
-    if (!definition) {
-      continue;
-    }
-
-    tile.improvementType = definition.improvementType;
-    tile.improvementSpriteKey = definition.improvementSpriteKey;
-  }
+  applyUrbanImprovementsToTerrain(tiles, cities, cols, rows);
 }
 
 function serializeTerrain(tiles) {
