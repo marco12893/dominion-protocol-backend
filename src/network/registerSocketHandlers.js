@@ -22,6 +22,20 @@ export function registerSocketHandlers({
 }) {
   const worldState = world.state;
   const playerAssignments = world.playerAssignments;
+  const hexManager = world.hexTurnManager;
+
+  function emitHexStateUpdates() {
+    const blueSocketId = worldState.teamSelections.blue.socketId;
+    const redSocketId = worldState.teamSelections.red.socketId;
+
+    if (worldState.teamSelections.blue.isOnline && blueSocketId) {
+      io.to(blueSocketId).emit("hex:state", hexManager.getStateForPlayer("blue"));
+    }
+
+    if (worldState.teamSelections.red.isOnline && redSocketId) {
+      io.to(redSocketId).emit("hex:state", hexManager.getStateForPlayer("red"));
+    }
+  }
 
   io.on("connection", (socket) => {
     socket.emit("world:snapshot", buildWorldSnapshot(world, serializeWorldState));
@@ -262,8 +276,6 @@ export function registerSocketHandlers({
 
     // ─── Hex Grid (Layer 2) Events ─────────────────────────────────────────
 
-    const hexManager = world.hexTurnManager;
-
     // Send hex state on connect (player-specific, with only their own pending moves)
     const initialColor = playerAssignments.get(socket.id);
     socket.emit(
@@ -292,6 +304,23 @@ export function registerSocketHandlers({
       if (result.success) {
         socket.emit("hex:moveCancelled", { unitId });
       }
+    });
+
+    socket.on("hex:buildUnit", ({ cityId, variantId }) => {
+      const color = playerAssignments.get(socket.id);
+      if (!color) return;
+
+      const result = hexManager.buildUnit(color, cityId, variantId);
+      if (!result.success) {
+        socket.emit("hex:buildRejected", {
+          cityId,
+          variantId,
+          error: result.error,
+        });
+        return;
+      }
+
+      emitHexStateUpdates();
     });
 
     socket.on("hex:endTurn", () => {

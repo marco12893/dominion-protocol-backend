@@ -47,7 +47,12 @@ const RESOURCE_DEFINITIONS = [
     isValid: (tile) => (
       !tile.isWater &&
       tile.elevation === "flat" &&
-      (tile.biome === "desert" || tile.biome === "plains" || tile.biome === "tundra")
+      (
+        tile.biome === "desert" ||
+        tile.biome === "plains" ||
+        tile.biome === "tundra" ||
+        tile.biome === "grassland"
+      )
     ),
   },
 ];
@@ -671,14 +676,21 @@ function scoreResourceTile(tile, seed) {
   });
 }
 
-function canPlaceResource(tile, definition, placedResources) {
+function canPlaceResource(tile, definition, placedResources, {
+  ignoreMinimumDistance = false,
+  ignoreSameTypeSpacing = false,
+} = {}) {
   for (const placed of placedResources) {
     const distance = hexDistance(tile.col, tile.row, placed.col, placed.row);
-    if (distance < 2) {
+    if (!ignoreMinimumDistance && distance < 2) {
       return false;
     }
 
-    if (placed.resourceType === definition.type && distance < definition.minSpacing) {
+    if (
+      !ignoreSameTypeSpacing &&
+      placed.resourceType === definition.type &&
+      distance < definition.minSpacing
+    ) {
       return false;
     }
   }
@@ -742,24 +754,36 @@ function spawnResources(tiles, cols, rows, seeds, cities, rng) {
       .filter(Boolean)
       .filter((tile) => !tile.isWater && tile.elevation !== "mountain");
 
-    if (borderTiles.some((tile) => tile.resourceType)) {
-      continue;
+    const cityResourceTypes = new Set(borderTiles.map((tile) => tile.resourceType).filter(Boolean));
+
+    for (const [definitionIndex, definition] of RESOURCE_DEFINITIONS.entries()) {
+      if (cityResourceTypes.has(definition.type)) {
+        continue;
+      }
+
+      const possiblePlacements = borderTiles
+        .filter((tile) => !tile.resourceType)
+        .filter((tile) => definition.isValid(tile))
+        .filter((tile) => canPlaceResource(tile, definition, placedResources, {
+          ignoreMinimumDistance: true,
+          ignoreSameTypeSpacing: true,
+        }))
+        .map((tile, tileIndex) => ({
+          tile,
+          definition,
+          score:
+            scoreResourceTile(tile, seeds.resourceSeed + tileIndex * 31 + definitionIndex * 97) +
+            rng.nextFloat() * 0.1,
+        }))
+        .sort((a, b) => b.score - a.score);
+
+      if (possiblePlacements.length === 0) {
+        continue;
+      }
+
+      placeResource(possiblePlacements[0].tile, definition, placedResources);
+      cityResourceTypes.add(definition.type);
     }
-
-    const possiblePlacements = borderTiles.flatMap((tile, tileIndex) => RESOURCE_DEFINITIONS
-      .filter((definition) => definition.isValid(tile) && canPlaceResource(tile, definition, placedResources))
-      .map((definition, definitionIndex) => ({
-        tile,
-        definition,
-        score: scoreResourceTile(tile, seeds.resourceSeed + tileIndex * 31 + definitionIndex * 97) + rng.nextFloat() * 0.1,
-      })))
-      .sort((a, b) => b.score - a.score);
-
-    if (possiblePlacements.length === 0) {
-      continue;
-    }
-
-    placeResource(possiblePlacements[0].tile, possiblePlacements[0].definition, placedResources);
   }
 
   for (const tile of tiles) {

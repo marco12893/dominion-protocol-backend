@@ -1,9 +1,8 @@
 /**
  * Server-side hex turn manager for Layer 2 strategic map.
  *
- * Manages hex units, pending moves, turn resolution, and player readiness.
- * Moves are private - each player can only see their own pending moves
- * until the turn resolves.
+ * Manages hex units, city production, resource income, pending moves,
+ * and simultaneous turn resolution.
  */
 
 import { getTraversableHexesInRange } from "../utils/hexMath.js";
@@ -14,6 +13,19 @@ import {
   HEX_MOVEMENT_RANGE,
   INITIAL_HEX_UNITS,
 } from "./hexConfig.js";
+import {
+  HEX_UNIT_PRODUCTION_CATALOG,
+  addResourceIncome,
+  buildHexCityOwnershipMap,
+  canAffordCost,
+  cloneResourceLedger,
+  cloneResourceStockpile,
+  computePlayerResourceIncome,
+  createEmptyResourceStockpile,
+  createInitialResourceLedger,
+  deductResourceCost,
+  getUnitBuildCost,
+} from "./hexEconomy.js";
 import { generateHexTerrain } from "../world/terrainGeneration.js";
 
 function createTerrainSnapshot(seed = Date.now()) {
@@ -40,44 +52,90 @@ function buildTerrainLookup(terrainTiles) {
   );
 }
 
+function createInitialHexUnits() {
+  return INITIAL_HEX_UNITS.map((unit) => ({
+    ...unit,
+    variantId: unit.variantId ?? "rifleman",
+  }));
+}
+
+function cloneHexUnits(units) {
+  return units.map((unit) => ({ ...unit }));
+}
+
+function createPlayerColors() {
+  return [...new Set(HEX_CITIES.map((city) => city.owner).filter(Boolean))];
+}
+
 export function createHexTurnManager() {
-  let hexUnits = INITIAL_HEX_UNITS.map((unit) => ({ ...unit }));
+  const playerColors = createPlayerColors();
+  let hexUnits = createInitialHexUnits();
   const pendingMoves = new Map();
   const readyPlayers = new Set();
   let turnNumber = 1;
   let isResolving = false;
+  let nextBuiltUnitSequence = 1;
   let { terrainSeed, terrainTiles } = createTerrainSnapshot();
   let terrainLookup = buildTerrainLookup(terrainTiles);
+  let cityOwnership = buildHexCityOwnershipMap(HEX_CITIES, HEX_GRID_COLS, HEX_GRID_ROWS);
+  let resourceIncome = createInitialResourceLedger(playerColors);
+  let resourceStockpiles = createInitialResourceLedger(playerColors);
 
-  function getState() {
+  function initializeEconomy() {
+    cityOwnership = buildHexCityOwnershipMap(HEX_CITIES, HEX_GRID_COLS, HEX_GRID_ROWS);
+
+    resourceIncome = createInitialResourceLedger(playerColors);
+    const calculatedIncome = computePlayerResourceIncome({
+      terrainTiles,
+      cities: HEX_CITIES,
+      cols: HEX_GRID_COLS,
+      rows: HEX_GRID_ROWS,
+    });
+
+    for (const playerColor of playerColors) {
+      resourceIncome[playerColor] = cloneResourceStockpile(
+        calculatedIncome[playerColor] ?? createEmptyResourceStockpile(),
+      );
+    }
+
+    resourceStockpiles = createInitialResourceLedger(playerColors);
+  }
+
+  function buildBaseState() {
     return {
       terrainSeed,
       terrainTiles,
       cities: HEX_CITIES.map((city) => ({ ...city })),
-      hexUnits: hexUnits.map((unit) => ({ ...unit })),
+      hexUnits: cloneHexUnits(hexUnits),
       turnNumber,
       readyPlayers: [...readyPlayers],
       isResolving,
+      resourceStockpiles: cloneResourceLedger(resourceStockpiles),
+      resourceIncome: cloneResourceLedger(resourceIncome),
+      unitProductionCatalog: HEX_UNIT_PRODUCTION_CATALOG,
     };
   }
 
-  function getStateForPlayer(playerColor) {
+  function createPendingMoveState(playerColor) {
     const ownMoves = {};
+
     for (const [unitId, move] of pendingMoves) {
       if (move.owner === playerColor) {
         ownMoves[unitId] = { toCol: move.toCol, toRow: move.toRow };
       }
     }
 
+    return ownMoves;
+  }
+
+  function getState() {
+    return buildBaseState();
+  }
+
+  function getStateForPlayer(playerColor) {
     return {
-      terrainSeed,
-      terrainTiles,
-      cities: HEX_CITIES.map((city) => ({ ...city })),
-      hexUnits: hexUnits.map((unit) => ({ ...unit })),
-      turnNumber,
-      readyPlayers: [...readyPlayers],
-      isResolving,
-      pendingMoves: ownMoves,
+      ...buildBaseState(),
+      pendingMoves: createPendingMoveState(playerColor),
     };
   }
 
@@ -131,6 +189,10 @@ export function createHexTurnManager() {
         }
 
         const key = getHexKey(col, row);
+        if (cityOwnership.cityCenterKeySet.has(key)) {
+          return false;
+        }
+
         return !occupiedHexKeys.has(key) && !blockedPendingTargets.has(key);
       },
     );
@@ -159,6 +221,84 @@ export function createHexTurnManager() {
 
     pendingMoves.delete(unitId);
     return { success: true };
+  }
+
+  function findBuildSpawnHex(city) {
+    const cityHexes = cityOwnership.cityTileMap.get(city.id) ?? [];
+    const occupiedHexKeys = new Set(
+      hexUnits.map((unit) => getHexKey(unit.col, unit.row)),
+    );
+    const reservedPendingTargets = new Set(
+      [...pendingMoves.values()].map((move) => getHexKey(move.toCol, move.toRow)),
+    );
+
+    return cityHexes
+      .filter((hex) => hex.col !== city.centerCol || hex.row !== city.centerRow)
+      .find((hex) => {
+        const key = getHexKey(hex.col, hex.row);
+        const terrainTile = terrainLookup.get(key);
+        return (
+          terrainTile &&
+          !terrainTile.isWater &&
+          !occupiedHexKeys.has(key) &&
+          !reservedPendingTargets.has(key)
+        );
+      }) ?? null;
+  }
+
+  function buildUnit(playerColor, cityId, variantId) {
+    if (isResolving) {
+      return { success: false, error: "Turn is resolving" };
+    }
+
+    if (readyPlayers.has(playerColor)) {
+      return { success: false, error: "Already marked ready" };
+    }
+
+    const city = cityOwnership.cityById.get(cityId);
+    if (!city) {
+      return { success: false, error: "City not found" };
+    }
+
+    if (city.owner !== playerColor) {
+      return { success: false, error: "You can only build in your own city" };
+    }
+
+    if (!HEX_UNIT_PRODUCTION_CATALOG[variantId]) {
+      return { success: false, error: "Unknown unit type" };
+    }
+
+    const cost = getUnitBuildCost(variantId);
+    const playerStockpile = resourceStockpiles[playerColor] ?? createEmptyResourceStockpile();
+    if (!canAffordCost(playerStockpile, cost)) {
+      return { success: false, error: "Insufficient resources" };
+    }
+
+    const spawnHex = findBuildSpawnHex(city);
+    if (!spawnHex) {
+      return { success: false, error: "All city deployment tiles are occupied" };
+    }
+
+    const unit = {
+      id: `hex-built-${playerColor}-${nextBuiltUnitSequence}`,
+      col: spawnHex.col,
+      row: spawnHex.row,
+      owner: playerColor,
+      variantId,
+    };
+    nextBuiltUnitSequence += 1;
+
+    hexUnits = [...hexUnits, unit];
+    resourceStockpiles = {
+      ...resourceStockpiles,
+      [playerColor]: deductResourceCost(playerStockpile, cost),
+    };
+
+    return {
+      success: true,
+      unit: { ...unit },
+      resourceStockpiles: cloneResourceLedger(resourceStockpiles),
+    };
   }
 
   function setPlayerReady(playerColor) {
@@ -207,37 +347,51 @@ export function createHexTurnManager() {
       unit.row = move.toRow;
     }
 
+    for (const playerColor of playerColors) {
+      resourceStockpiles[playerColor] = addResourceIncome(
+        resourceStockpiles[playerColor],
+        resourceIncome[playerColor],
+      );
+    }
+
     pendingMoves.clear();
     readyPlayers.clear();
     turnNumber += 1;
     isResolving = false;
 
     return {
-      hexUnits: hexUnits.map((unit) => ({ ...unit })),
+      hexUnits: cloneHexUnits(hexUnits),
       turnNumber,
       appliedMoves,
+      resourceStockpiles: cloneResourceLedger(resourceStockpiles),
+      resourceIncome: cloneResourceLedger(resourceIncome),
     };
   }
 
   function reset() {
-    hexUnits = INITIAL_HEX_UNITS.map((unit) => ({ ...unit }));
+    hexUnits = createInitialHexUnits();
     pendingMoves.clear();
     readyPlayers.clear();
     turnNumber = 1;
     isResolving = false;
+    nextBuiltUnitSequence = 1;
 
     ({ terrainSeed, terrainTiles } = createTerrainSnapshot());
     terrainLookup = buildTerrainLookup(terrainTiles);
+    initializeEconomy();
   }
 
+  initializeEconomy();
+
   return {
+    buildUnit,
+    cancelMove,
     getState,
     getStateForPlayer,
-    submitMove,
-    cancelMove,
-    setPlayerReady,
-    setPlayerUnready,
     resolveTurn,
     reset,
+    setPlayerReady,
+    setPlayerUnready,
+    submitMove,
   };
 }
