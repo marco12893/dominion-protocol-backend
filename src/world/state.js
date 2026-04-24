@@ -11,6 +11,17 @@ export function createWorld() {
     state: {
       obstacles: OBSTACLES,
       units: [],
+      layer3Battle: {
+        status: "idle",
+        battleId: null,
+        queueLength: 0,
+        hex: null,
+        maxDurationSeconds: 180,
+        startedAtTick: null,
+        endsAtTick: null,
+        blueArmy: null,
+        redArmy: null,
+      },
       teamSelections: {
         blue: { socketId: null, isOnline: false, hasDeployed: false },
         red: { socketId: null, isOnline: false, hasDeployed: false },

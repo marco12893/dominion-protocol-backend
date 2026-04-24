@@ -1,0 +1,1 @@
+export const LAYER_3_BATTLE_DURATION_SECONDS = 180;

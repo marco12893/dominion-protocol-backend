@@ -3,10 +3,10 @@ import { getHexesInRange } from "../utils/hexMath.js";
 export const HEX_RESOURCE_ORDER = ["gold", "oil", "iron", "wheat"];
 
 export const INITIAL_HEX_PLAYER_STOCKPILE = Object.freeze({
-  gold: 40,
-  oil: 6,
-  iron: 10,
-  wheat: 12,
+  gold: 60,
+  oil: 8,
+  iron: 12,
+  wheat: 20,
 });
 
 export const HEX_RESOURCE_YIELDS = Object.freeze({
@@ -18,31 +18,40 @@ export const HEX_RESOURCE_YIELDS = Object.freeze({
 
 export const HEX_UNIT_PRODUCTION_CATALOG = Object.freeze({
   rifleman: Object.freeze({
-    cost: Object.freeze({ gold: 10, wheat: 4 }),
+    cost: Object.freeze({ gold: 1, wheat: 1 }),
+    slotCapacity: 30,
   }),
   antiTank: Object.freeze({
-    cost: Object.freeze({ gold: 14, wheat: 3, iron: 2 }),
+    cost: Object.freeze({ gold: 2, wheat: 1, iron: 1 }),
+    slotCapacity: 18,
   }),
   armoredCar: Object.freeze({
-    cost: Object.freeze({ gold: 16, wheat: 2, iron: 2, oil: 1 }),
+    cost: Object.freeze({ gold: 2, iron: 1, oil: 1 }),
+    slotCapacity: 16,
   }),
   lightTank: Object.freeze({
-    cost: Object.freeze({ gold: 24, wheat: 2, iron: 4, oil: 2 }),
+    cost: Object.freeze({ gold: 3, iron: 1, oil: 1 }),
+    slotCapacity: 12,
   }),
   heavyTank: Object.freeze({
-    cost: Object.freeze({ gold: 38, wheat: 3, iron: 7, oil: 3 }),
+    cost: Object.freeze({ gold: 5, iron: 2, oil: 2 }),
+    slotCapacity: 8,
   }),
   fighter: Object.freeze({
-    cost: Object.freeze({ gold: 26, iron: 2, oil: 4 }),
+    cost: Object.freeze({ gold: 4, iron: 1, oil: 2 }),
+    slotCapacity: 6,
   }),
   bomber: Object.freeze({
-    cost: Object.freeze({ gold: 34, iron: 3, oil: 6 }),
+    cost: Object.freeze({ gold: 6, iron: 1, oil: 3 }),
+    slotCapacity: 4,
   }),
   antiAir: Object.freeze({
-    cost: Object.freeze({ gold: 20, wheat: 1, iron: 4, oil: 1 }),
+    cost: Object.freeze({ gold: 2, iron: 1, oil: 1 }),
+    slotCapacity: 12,
   }),
   attackHelicopter: Object.freeze({
-    cost: Object.freeze({ gold: 28, wheat: 1, iron: 2, oil: 5 }),
+    cost: Object.freeze({ gold: 4, iron: 1, oil: 2 }),
+    slotCapacity: 6,
   }),
 });
 
@@ -87,6 +96,18 @@ export function normalizeResourceCost(cost = {}) {
 
 export function getUnitBuildCost(variantId) {
   return normalizeResourceCost(HEX_UNIT_PRODUCTION_CATALOG[variantId]?.cost);
+}
+
+export function multiplyResourceCost(cost, multiplier = 1) {
+  const normalizedCost = normalizeResourceCost(cost);
+  const normalizedMultiplier = Math.max(0, Math.floor(Number(multiplier) || 0));
+  const totalCost = createEmptyResourceStockpile();
+
+  for (const resourceType of HEX_RESOURCE_ORDER) {
+    totalCost[resourceType] = normalizedCost[resourceType] * normalizedMultiplier;
+  }
+
+  return totalCost;
 }
 
 export function cloneResourceLedger(ledger = {}) {

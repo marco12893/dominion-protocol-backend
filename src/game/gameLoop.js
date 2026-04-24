@@ -15,6 +15,7 @@ export function createGameLoop({
   resolveObstacleCollisions,
   resolveUnitCollisions,
   detectAndResolveDeadlocks,
+  tickLayer3Battle,
   serializeWorldState,
   io,
 }) {
@@ -99,6 +100,7 @@ export function createGameLoop({
     hasMoved = resolveObstacleCollisions(aliveUnits) || hasMoved;
     hasMoved = resolveUnitCollisions(aliveUnits) || hasMoved;
     hasMoved = detectAndResolveDeadlocks(aliveUnits) || hasMoved;
+    hasMoved = tickLayer3Battle?.() || hasMoved;
 
     world.pendingBroadcast = world.pendingBroadcast || hasMoved;
 

@@ -100,6 +100,7 @@ export function serializeUnit(unit) {
 export function serializeWorldState(state) {
   return {
     obstacles: state.obstacles,
+    layer3Battle: state.layer3Battle,
     teamSelections: state.teamSelections,
     units: state.units.filter((unit) => unit.health > 0).map(serializeUnit),
   };
@@ -184,6 +185,7 @@ function createUnitPatch(previousUnit, nextUnit) {
 export function createSerializedWorldCache(snapshot) {
   return {
     obstacles: clonePlainValue(snapshot.obstacles),
+    layer3Battle: clonePlainValue(snapshot.layer3Battle),
     teamSelections: clonePlainValue(snapshot.teamSelections),
     unitsById: new Map(snapshot.units.map((unit) => [unit.id, clonePlainValue(unit)])),
   };
@@ -221,6 +223,10 @@ export function createWorldDelta(snapshot, previousCache) {
     delta.teamSelections = clonePlainValue(snapshot.teamSelections);
   }
 
+  if (!areValuesEqual(previousCache?.layer3Battle, snapshot.layer3Battle)) {
+    delta.layer3Battle = clonePlainValue(snapshot.layer3Battle);
+  }
+
   if (!areValuesEqual(previousCache?.obstacles, snapshot.obstacles)) {
     delta.obstacles = clonePlainValue(snapshot.obstacles);
   }
@@ -233,6 +239,7 @@ export function hasWorldDeltaChanges(delta) {
     delta.units.length > 0 ||
     delta.removedUnitIds.length > 0 ||
     delta.teamSelections !== undefined ||
+    delta.layer3Battle !== undefined ||
     delta.obstacles !== undefined
   );
 }

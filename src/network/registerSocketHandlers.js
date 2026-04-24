@@ -1,11 +1,7 @@
 import {
-  DEPLOYMENT_GRID_COLS,
-  DEPLOYMENT_GRID_SPACING,
   MAP_HEIGHT,
   MAP_WIDTH,
-  STARTING_RESOURCES,
   UNIT_RADIUS,
-  UNIT_VARIANTS,
 } from "../config/gameConstants.js";
 import { buildWorldSnapshot, emitWorldSnapshot } from "./worldBroadcast.js";
 import { clamp } from "../utils/math.js";
@@ -19,23 +15,11 @@ export function registerSocketHandlers({
   assignFormationSlots,
   processUnitOrder,
   assignUnitPath,
+  layer3BattleManager,
 }) {
   const worldState = world.state;
   const playerAssignments = world.playerAssignments;
   const hexManager = world.hexTurnManager;
-
-  function emitHexStateUpdates() {
-    const blueSocketId = worldState.teamSelections.blue.socketId;
-    const redSocketId = worldState.teamSelections.red.socketId;
-
-    if (worldState.teamSelections.blue.isOnline && blueSocketId) {
-      io.to(blueSocketId).emit("hex:state", hexManager.getStateForPlayer("blue"));
-    }
-
-    if (worldState.teamSelections.red.isOnline && redSocketId) {
-      io.to(redSocketId).emit("hex:state", hexManager.getStateForPlayer("red"));
-    }
-  }
 
   io.on("connection", (socket) => {
     socket.emit("world:snapshot", buildWorldSnapshot(world, serializeWorldState));
@@ -54,43 +38,12 @@ export function registerSocketHandlers({
       socket.emit("hex:state", world.hexTurnManager.getStateForPlayer(color));
     });
 
-    socket.on("player:deploy", (manifest) => {
-      const color = playerAssignments.get(socket.id);
-      if (!color || worldState.teamSelections[color].hasDeployed) return;
-
-      let totalCost = 0;
-      for (const [variantId, count] of Object.entries(manifest)) {
-        if (!UNIT_VARIANTS[variantId] || count <= 0) continue;
-        totalCost += UNIT_VARIANTS[variantId].cost * count;
-      }
-
-      if (totalCost > STARTING_RESOURCES) return;
-
-      const spawnX = color === "blue" ? 400 : 2800;
-      const spawnY = color === "blue" ? 400 : 2800;
-      const direction = color === "blue" ? 1 : -1;
-
-      let index = 0;
-      for (const [variantId, count] of Object.entries(manifest)) {
-        for (let i = 0; i < count; i += 1) {
-          const col = index % DEPLOYMENT_GRID_COLS;
-          const row = Math.floor(index / DEPLOYMENT_GRID_COLS);
-          const x = spawnX + col * DEPLOYMENT_GRID_SPACING * direction;
-          const y = spawnY + row * DEPLOYMENT_GRID_SPACING * direction;
-
-          const unit = createUnit(`${color}-${variantId}-${i}-${Date.now()}`, x, y, color, variantId);
-          worldState.units.push(unit);
-          index += 1;
-        }
-      }
-
-      worldState.teamSelections[color].hasDeployed = true;
-      emitWorldSnapshot(io, world, serializeWorldState);
+    socket.on("player:deploy", (_manifest) => {
     });
 
     socket.on("unit:move", ({ unitIds, position, isQueued }) => {
       const playerColor = playerAssignments.get(socket.id);
-      if (!playerColor) return;
+      if (!playerColor || worldState.layer3Battle?.status !== "active") return;
       if (
         !Array.isArray(unitIds) ||
         unitIds.length === 0 ||
@@ -125,7 +78,7 @@ export function registerSocketHandlers({
 
     socket.on("unit:attack", ({ unitIds, targetId, isQueued }) => {
       const playerColor = playerAssignments.get(socket.id);
-      if (!playerColor) return;
+      if (!playerColor || worldState.layer3Battle?.status !== "active") return;
       if (!Array.isArray(unitIds) || unitIds.length === 0 || typeof targetId !== "string") {
         return;
       }
@@ -154,7 +107,7 @@ export function registerSocketHandlers({
 
     socket.on("unit:attackMove", ({ unitIds, position, isQueued }) => {
       const playerColor = playerAssignments.get(socket.id);
-      if (!playerColor) return;
+      if (!playerColor || worldState.layer3Battle?.status !== "active") return;
       if (
         !Array.isArray(unitIds) ||
         unitIds.length === 0 ||
@@ -189,7 +142,7 @@ export function registerSocketHandlers({
 
     socket.on("unit:stop", ({ unitIds, isQueued }) => {
       const playerColor = playerAssignments.get(socket.id);
-      if (!playerColor) return;
+      if (!playerColor || worldState.layer3Battle?.status !== "active") return;
       if (!Array.isArray(unitIds) || unitIds.length === 0) {
         return;
       }
@@ -207,7 +160,7 @@ export function registerSocketHandlers({
 
     socket.on("unit:holdPosition", ({ unitIds, isQueued }) => {
       const playerColor = playerAssignments.get(socket.id);
-      if (!playerColor) return;
+      if (!playerColor || worldState.layer3Battle?.status !== "active") return;
       if (!Array.isArray(unitIds) || unitIds.length === 0) {
         return;
       }
@@ -235,6 +188,7 @@ export function registerSocketHandlers({
 
       // Reset hex grid state
       world.hexTurnManager.reset();
+      layer3BattleManager?.reset();
 
       io.emit("game:reset");
       emitWorldSnapshot(io, world, serializeWorldState);
@@ -306,21 +260,22 @@ export function registerSocketHandlers({
       }
     });
 
-    socket.on("hex:buildUnit", ({ cityId, variantId }) => {
+    socket.on("hex:buildUnit", ({ cityId, variantId, quantity }) => {
       const color = playerAssignments.get(socket.id);
       if (!color) return;
 
-      const result = hexManager.buildUnit(color, cityId, variantId);
+      const result = hexManager.buildUnit(color, cityId, variantId, quantity);
       if (!result.success) {
         socket.emit("hex:buildRejected", {
           cityId,
           variantId,
+          quantity,
           error: result.error,
         });
         return;
       }
 
-      emitHexStateUpdates();
+        emitHexStateUpdates(io, world);
     });
 
     socket.on("hex:endTurn", () => {
@@ -336,7 +291,17 @@ export function registerSocketHandlers({
       // If both players are ready, resolve the turn
       if (result.allReady) {
         const resolved = hexManager.resolveTurn();
-        io.emit("hex:turnResolved", resolved);
+        if (Array.isArray(resolved?.engagements) && resolved.engagements.length > 0) {
+          layer3BattleManager?.queueEngagements(resolved.engagements);
+        }
+
+        const latestHexState = hexManager.getState();
+        io.emit("hex:turnResolved", {
+          ...resolved,
+          hexUnits: latestHexState.hexUnits,
+          layer3Battle: latestHexState.layer3Battle,
+        });
+        emitHexStateUpdates(io, world);
       }
     });
 
@@ -359,4 +324,19 @@ export function registerSocketHandlers({
       }
     });
   });
+}
+
+export function emitHexStateUpdates(io, world) {
+  const worldState = world.state;
+  const hexManager = world.hexTurnManager;
+  const blueSocketId = worldState.teamSelections.blue.socketId;
+  const redSocketId = worldState.teamSelections.red.socketId;
+
+  if (worldState.teamSelections.blue.isOnline && blueSocketId) {
+    io.to(blueSocketId).emit("hex:state", hexManager.getStateForPlayer("blue"));
+  }
+
+  if (worldState.teamSelections.red.isOnline && redSocketId) {
+    io.to(redSocketId).emit("hex:state", hexManager.getStateForPlayer("red"));
+  }
 }

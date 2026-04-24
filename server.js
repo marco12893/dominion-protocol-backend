@@ -7,9 +7,10 @@ import { CLIENT_ORIGIN, PORT, TICK_RATE } from "./src/config/gameConstants.js";
 import { createCombatSystem } from "./src/game/combat.js";
 import { buildFormation, assignFormationSlots } from "./src/game/formation.js";
 import { createGameLoop } from "./src/game/gameLoop.js";
+import { createLayer3BattleManager } from "./src/game/layer3BattleManager.js";
 import { createMovementSystem } from "./src/game/movement.js";
 import { createOrderController } from "./src/game/orders.js";
-import { registerSocketHandlers } from "./src/network/registerSocketHandlers.js";
+import { emitHexStateUpdates, registerSocketHandlers } from "./src/network/registerSocketHandlers.js";
 import { createUnit, serializeWorldState } from "./src/units/units.js";
 import { createWorld } from "./src/world/state.js";
 
@@ -39,6 +40,14 @@ const combat = createCombatSystem({
   world,
   assignUnitPath: movement.assignUnitPath,
 });
+const layer3BattleManager = createLayer3BattleManager({
+  world,
+  hexManager: world.hexTurnManager,
+  createUnit,
+  buildFormation,
+  executeOrder: orders.executeOrder,
+  emitHexStateUpdates: () => emitHexStateUpdates(io, world),
+});
 
 registerSocketHandlers({
   io,
@@ -49,6 +58,7 @@ registerSocketHandlers({
   assignFormationSlots,
   processUnitOrder: orders.processUnitOrder,
   assignUnitPath: movement.assignUnitPath,
+  layer3BattleManager,
 });
 
 const tick = createGameLoop({
@@ -59,6 +69,7 @@ const tick = createGameLoop({
   resolveObstacleCollisions: movement.resolveObstacleCollisions,
   resolveUnitCollisions: movement.resolveUnitCollisions,
   detectAndResolveDeadlocks: movement.detectAndResolveDeadlocks,
+  tickLayer3Battle: layer3BattleManager.tick,
   serializeWorldState,
   io,
 });
