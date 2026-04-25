@@ -198,8 +198,13 @@ export function registerSocketHandlers({
     socket.on("disconnect", () => {
       const color = playerAssignments.get(socket.id);
       if (color && worldState.teamSelections[color]) {
-        worldState.teamSelections[color].isOnline = false;
-        emitWorldSnapshot(io, world, serializeWorldState);
+        // Only mark offline if this socket is still the active one for this team.
+        // A newer socket may have already taken over (e.g. after reconnect),
+        // so a stale socket disconnecting should not flip the team offline.
+        if (worldState.teamSelections[color].socketId === socket.id) {
+          worldState.teamSelections[color].isOnline = false;
+          emitWorldSnapshot(io, world, serializeWorldState);
+        }
       }
       playerAssignments.delete(socket.id);
     });
